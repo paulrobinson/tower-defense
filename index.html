@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hex Keep Defence</title>
+    <link rel="stylesheet" href="src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Hex Keep Defence</h1>
+      <p class="subtitle">A turn-based, two-player tower defence game</p>
+    </header>
+
+    <main>
+      <section class="board-wrap">
+        <svg id="board" role="img" aria-label="Hex game board"></svg>
+      </section>
+
+      <aside class="panel">
+        <div id="turn-banner" class="turn-banner"></div>
+
+        <div class="stats">
+          <div class="stat defender">
+            <span class="label">Defender reserve</span>
+            <span id="def-reserve" class="value"></span>
+          </div>
+          <div class="stat attacker">
+            <span class="label">Attacker reserve</span>
+            <span id="att-reserve" class="value"></span>
+          </div>
+          <div class="stat keep">
+            <span class="label">Keep HP</span>
+            <span id="keep-hp" class="value"></span>
+          </div>
+        </div>
+
+        <p id="message" class="message" role="status"></p>
+
+        <div class="buttons">
+          <button id="pass-btn" type="button">Pass turn</button>
+          <button id="new-btn" type="button">New game</button>
+        </div>
+
+        <details class="rules" open>
+          <summary>How to play</summary>
+          <ul>
+            <li>Players alternate turns. Attackers go first.</li>
+            <li>On your turn, do <strong>one</strong> thing: place a piece, or move a piece one cell.</li>
+            <li><span class="swatch defender"></span> Defenders place within 3 cells of the keep.</li>
+            <li><span class="swatch attacker"></span> Attackers place on the edge of the board.</li>
+            <li>Moving onto an enemy piece captures it.</li>
+            <li>An attacker moving into the keep deals 1 damage.</li>
+            <li>Attackers win by destroying the keep. Defenders win by destroying every attacking piece.</li>
+          </ul>
+          <p class="hint">Click a highlighted empty cell to place. Click one of your pieces to select it, then click a highlighted cell to move.</p>
+        </details>
+
+        <h2>Log</h2>
+        <ol id="log" class="log" reversed></ol>
+      </aside>
+    </main>
+
+    <script src="src/game.js"></script>
+    <script src="src/ui.js"></script>
+  </body>
+</html>
