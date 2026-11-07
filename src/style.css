@@ -14,6 +14,7 @@
   --attacker-soft: rgba(192, 57, 43, 0.3);
   --keep: #7a6a4f;
   --select: #f2b705;
+  --cpu-arrow: #6f6a62;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +33,7 @@
     --attacker: #e8604f;
     --attacker-soft: rgba(232, 96, 79, 0.35);
     --keep: #b39d74;
+    --cpu-arrow: #b4ada2;
   }
 }
 
@@ -125,6 +127,27 @@ main {
 .piece .glyph { fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .piece.defender .glyph { fill: rgba(255, 255, 255, 0.25); }
 .piece.selected circle, .piece.selected .body { stroke: var(--select); stroke-width: 3; }
+.piece.done { opacity: 0.55; }
+.piece.done .piece-inner { filter: saturate(0.6); }
+.piece.captured { opacity: 0; transition: opacity 0.35s ease-in; }
+.piece.entering .piece-inner { animation: enter 0.45s cubic-bezier(.2,1.4,.4,1) both; }
+@keyframes enter { from { transform: scale(0.1); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.keep-piece.targetable .keep-hex { stroke: var(--select); stroke-width: 3; }
+.keep-piece.hit .keep-hex { animation: keep-hit 0.5s ease-out; }
+@keyframes keep-hit { 0% { fill: var(--attacker); } 100% { fill: var(--keep); } }
+
+.arrows { pointer-events: none; }
+.arrow { fill: none; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
+.arrow.defender { stroke: var(--defender); }
+.arrow.cpu { stroke: var(--cpu-arrow); stroke-dasharray: 6 4; }
+.arrowhead.defender { fill: var(--defender); }
+.arrowhead.cpu { fill: var(--cpu-arrow); }
+
+.marks { pointer-events: none; }
+.ring { fill: none; stroke-width: 2; stroke-dasharray: 4 3; }
+.ring.cpu { stroke: var(--cpu-arrow); }
+.ring.defender { stroke: var(--defender); }
 
 /* ---------- panel ---------- */
 
@@ -139,10 +162,20 @@ main {
 .turn-banner.defender { background: var(--defender); }
 .turn-banner.attacker { background: var(--attacker); }
 .turn-banner.winner { font-size: 1.3rem; }
+.turn-banner .dots { display: none; }
+.turn-banner.thinking .dots { display: inline; }
+.turn-banner.thinking .dots span { animation: blink 1.2s infinite both; }
+.turn-banner.thinking .dots span:nth-child(2) { animation-delay: 0.2s; }
+.turn-banner.thinking .dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .piece.entering .piece-inner, .keep-piece.hit .keep-hex, .turn-banner.thinking .dots span { animation: none; }
+}
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
   margin: 12px 0;
 }
@@ -172,6 +205,7 @@ button {
   cursor: pointer;
 }
 button:hover:not(:disabled) { border-color: var(--text); }
+button:focus-visible { outline: 2px solid var(--select); outline-offset: 2px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .rules { margin-top: 16px; }

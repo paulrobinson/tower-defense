@@ -2,11 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const G = require('../src/game.js');
 
+/** Put a piece straight onto the board (bypassing placement rules). */
+function put(game, owner, q, r) {
+  const piece = { id: game.nextId++, owner, q, r, moved: false };
+  game.pieces.set(G.key(q, r), piece);
+  return piece;
+}
+
 test('grid is roughly circular and 17 cells wide', () => {
   const game = G.createGame();
   const middleRow = [...game.cells.values()].filter((c) => c.r === 0);
   assert.equal(middleRow.length, 17);
-  // Every row is at most 17 wide, and the shape is symmetric top/bottom.
   for (let r = -10; r <= 10; r++) {
     const top = [...game.cells.values()].filter((c) => c.r === r).length;
     const bottom = [...game.cells.values()].filter((c) => c.r === -r).length;
@@ -23,67 +29,119 @@ test('keep sits at the centre', () => {
   assert.ok(G.isKeep(game, 0, 0));
 });
 
-test('attackers go first and turns alternate', () => {
+test('attackers go first; turns alternate only when ended', () => {
   const game = G.createGame();
   assert.equal(game.turn, G.ATTACKER);
   assert.ok(G.place(game, 8, 0).ok);
+  assert.equal(game.turn, G.ATTACKER, 'placing does not end the turn');
+  G.endTurn(game);
   assert.equal(game.turn, G.DEFENDER);
-  assert.ok(G.place(game, 1, 0).ok);
+  G.endTurn(game);
   assert.equal(game.turn, G.ATTACKER);
 });
 
-test('attackers may only place on edge cells', () => {
+test('attackers place one piece per turn, on edge cells only', () => {
   const game = G.createGame();
   assert.equal(G.place(game, 3, 0).ok, false);
-  assert.equal(game.turn, G.ATTACKER, 'failed action does not end turn');
   assert.ok(G.place(game, -8, 0).ok);
+  assert.equal(G.place(game, 8, 0).ok, false, 'second placement in one turn');
+  assert.equal(game.reserves[G.ATTACKER], G.CONFIG.attackerReserve - 1);
 });
 
-test('defenders may only place within the keep radius', () => {
+test('defenders cannot place manually but get a new piece next to the keep each turn', () => {
   const game = G.createGame();
   G.place(game, 8, 0);
-  assert.equal(G.place(game, 4, 0).ok, false);
-  assert.equal(G.place(game, 0, 0).ok, false, 'cannot place on the keep');
-  assert.ok(G.place(game, 3, 0).ok);
+  G.endTurn(game);
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, 1);
+  const spawned = G.piecesOf(game, G.DEFENDER)[0];
+  assert.equal(G.hexDistance(spawned, game.keep), 1);
+  assert.equal(G.place(game, 2, 0).ok, false);
+  G.endTurn(game);
+  G.endTurn(game);
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, 2);
 });
 
-test('pieces move exactly one cell', () => {
+test('the reinforcement appears on the side facing the nearest attacker', () => {
   const game = G.createGame();
-  G.place(game, 8, 0); // attacker
-  G.place(game, 1, 0); // defender
-  assert.equal(G.move(game, { q: 8, r: 0 }, { q: 6, r: 0 }).ok, false);
-  assert.ok(G.move(game, { q: 8, r: 0 }, { q: 7, r: 0 }).ok);
-  assert.ok(G.pieceAt(game, 7, 0));
-  assert.equal(G.pieceAt(game, 8, 0), null);
+  G.place(game, 8, 0);
+  G.endTurn(game);
+  const spawned = G.piecesOf(game, G.DEFENDER)[0];
+  assert.deepEqual([spawned.q, spawned.r], [1, 0]);
+});
+
+test('every piece may move once per turn, up to two cells', () => {
+  const game = G.createGame();
+  const a = put(game, G.ATTACKER, 8, 0);
+  const b = put(game, G.ATTACKER, -8, 0);
+  assert.equal(G.move(game, { q: 8, r: 0 }, { q: 5, r: 0 }).ok, false, 'three cells is too far');
+  assert.ok(G.move(game, { q: 8, r: 0 }, { q: 6, r: 0 }).ok);
+  assert.equal(G.move(game, { q: 6, r: 0 }, { q: 5, r: 0 }).ok, false, 'already moved');
+  assert.ok(G.move(game, { q: -8, r: 0 }, { q: -7, r: 0 }).ok, 'second piece can still move');
+  assert.ok(a.moved && b.moved);
+  assert.equal(game.turn, G.ATTACKER);
+  G.endTurn(game);
+  G.endTurn(game);
+  assert.ok(!a.moved && !b.moved, 'moves reset at the start of the next turn');
+});
+
+test('pieces cannot pass through other pieces', () => {
+  const game = G.createGame();
+  put(game, G.ATTACKER, 5, 0);
+  // Wall off every cell between (5,0) and (3,0).
+  put(game, G.ATTACKER, 4, 0);
+  put(game, G.ATTACKER, 4, 1);
+  put(game, G.ATTACKER, 5, -1);
+  put(game, G.ATTACKER, 4, -1); // not adjacent to (3,0) via empty path otherwise
+  put(game, G.ATTACKER, 5, 1);
+  put(game, G.ATTACKER, 6, -1);
+  const targets = G.movesFor(game, 5, 0).map((t) => G.key(t.q, t.r));
+  assert.ok(!targets.includes(G.key(3, 0)));
 });
 
 test("players cannot move the opponent's pieces", () => {
   const game = G.createGame();
-  G.place(game, 8, 0);
-  G.place(game, 1, 0);
+  put(game, G.DEFENDER, 1, 0);
   assert.equal(G.move(game, { q: 1, r: 0 }, { q: 2, r: 0 }).ok, false);
 });
 
 test('moving onto an enemy captures it; defenders win when attackers are gone', () => {
-  const game = G.createGame({ reserves: { attacker: 1, defender: 2 } });
-  G.place(game, 8, 0); // attacker, reserve now 0
-  G.place(game, 3, 0); // defender
-  G.move(game, { q: 8, r: 0 }, { q: 7, r: 0 });
-  G.move(game, { q: 3, r: 0 }, { q: 4, r: 0 });
-  G.move(game, { q: 7, r: 0 }, { q: 6, r: 0 });
-  G.move(game, { q: 4, r: 0 }, { q: 5, r: 0 });
-  G.pass(game);
-  const result = G.move(game, { q: 5, r: 0 }, { q: 6, r: 0 });
-  assert.equal(result.kind, 'capture');
+  const game = G.createGame({ attackerReserve: 0 });
+  put(game, G.ATTACKER, 3, 0);
+  G.endTurn(game); // defender spawns at (1, 0)
+  const res = G.move(game, { q: 1, r: 0 }, { q: 3, r: 0 });
+  assert.equal(res.kind, 'capture');
+  assert.equal(G.pieceAt(game, 3, 0).owner, G.DEFENDER);
   assert.equal(game.winner, G.DEFENDER);
+});
+
+test('attackers strike the keep from up to two cells away and stop beside it', () => {
+  const game = G.createGame({ keepHp: 2 });
+  put(game, G.ATTACKER, 2, 0);
+  const res = G.move(game, { q: 2, r: 0 }, { q: 0, r: 0 });
+  assert.equal(res.kind, 'attack-keep');
+  assert.equal(game.keep.hp, 1);
+  const p = G.piecesOf(game, G.ATTACKER)[0];
+  assert.equal(G.hexDistance(p, game.keep), 1);
+  assert.equal(game.winner, null);
 });
 
 test('attackers win by destroying the keep', () => {
   const game = G.createGame({ keepHp: 1 });
-  // Put an attacker next to the keep directly for brevity.
-  game.pieces.set(G.key(1, 0), { id: 99, owner: G.ATTACKER, q: 1, r: 0 });
-  const result = G.move(game, { q: 1, r: 0 }, { q: 0, r: 0 });
-  assert.equal(result.kind, 'attack-keep');
-  assert.equal(game.keep.hp, 0);
+  put(game, G.ATTACKER, 1, 0);
+  G.move(game, { q: 1, r: 0 }, { q: 0, r: 0 });
   assert.equal(game.winner, G.ATTACKER);
+});
+
+test('moves are recorded for the turn and kept as lastTurn afterwards', () => {
+  const game = G.createGame();
+  put(game, G.ATTACKER, 8, 0);
+  G.place(game, -8, 0);
+  G.move(game, { q: 8, r: 0 }, { q: 6, r: 0 });
+  assert.equal(game.current.moves.length, 1);
+  assert.deepEqual(game.current.moves[0].path, [{ q: 7, r: 0 }, { q: 6, r: 0 }]);
+  assert.deepEqual(game.current.placed, [{ q: -8, r: 0 }]);
+  G.endTurn(game);
+  assert.equal(game.lastTurn.player, G.ATTACKER);
+  assert.equal(game.lastTurn.moves.length, 1);
+  assert.equal(game.current.moves.length, 0);
 });
