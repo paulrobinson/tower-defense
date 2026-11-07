@@ -10,7 +10,8 @@
  * reach plus staying put:
  *
  *   Offence: the average damage it could deal from there at the end of this
- *     turn. Damage to the keep counts extra for attackers, and a likely kill
+ *     turn (artillery only scores this by staying put, since it can't fire
+ *     after moving). Damage to the keep counts extra for attackers, and a likely kill
  *     earns a bonus.
  *   Danger: the average damage enemy units could deal to it there next turn,
  *     given where they can move, measured against its remaining HP. Losing
@@ -21,7 +22,9 @@
  *
  * Attackers gather before committing: until enough units are on the board
  * (or the reserve is empty) they weigh danger heavily and hang back. Once
- * committed they care much less about losses and press the assault.
+ * committed they care much less about losses and press the assault, and
+ * every turn they go without dealing damage makes them bolder still, so a
+ * defender who holds back can't stall them forever.
  */
 (function (root, factory) {
   const api = factory(root.TDGame || (typeof require !== 'undefined' ? require('./game.js') : null));
@@ -45,6 +48,7 @@
     gatherSize: 5, // attackers on board before they commit
     gatherCaution: 2.5, // danger multiplier while gathering
     assaultCaution: 0.25, // danger multiplier once committed
+    idleBoldness: 1, // per turn without dealing damage, caution is divided by (1 + this × turns)
     jitter: 2,
   };
 
@@ -97,12 +101,28 @@
     return onBoard < WEIGHTS.gatherSize && game.pools[G.ATTACKER].length > 0;
   }
 
+  /** Turns in a row this side has ended without dealing any damage. */
+  function idleTurns(game, owner) {
+    const state = (game.ai = game.ai || {});
+    const side = (state[owner] = state[owner] || { turn: null, total: 0, idle: 0 });
+    if (side.turn !== game.turnNumber) {
+      if (side.turn !== null) {
+        side.idle = game.damageDealt[owner] > side.total ? 0 : side.idle + 1;
+      }
+      side.turn = game.turnNumber;
+      side.total = game.damageDealt[owner];
+    }
+    return side.idle;
+  }
+
   function scoreCell(game, unit, cell, reach, caution, rng) {
     const incoming = expectedIncoming(game, unit, cell, reach);
     let danger = (incoming / unit.hp) * WEIGHTS.danger;
     if (incoming >= unit.hp) danger += WEIGHTS.death;
+    const staying = G.samePos(cell, unit);
+    const canShoot = staying || G.UNITS[unit.type].firesAfterMoving;
     return (
-      offenceScore(game, unit, cell) +
+      (canShoot ? offenceScore(game, unit, cell) : 0) +
       positionScore(game, unit, cell) -
       danger * caution +
       rng() * WEIGHTS.jitter
@@ -112,8 +132,12 @@
   /** The best destination for `unit`, or null to stay put. */
   function chooseMove(game, unit, rng = Math.random) {
     const reach = enemyReach(game, unit.owner);
-    const caution = unit.owner !== G.ATTACKER ? 1
-      : isGathering(game, unit.owner) ? WEIGHTS.gatherCaution : WEIGHTS.assaultCaution;
+    let caution = 1;
+    if (unit.owner === G.ATTACKER) {
+      caution = isGathering(game, unit.owner)
+        ? WEIGHTS.gatherCaution
+        : WEIGHTS.assaultCaution / (1 + WEIGHTS.idleBoldness * idleTurns(game, unit.owner));
+    }
     let best = { option: null, score: scoreCell(game, unit, unit, reach, caution, rng) };
     for (const option of G.movesFor(game, unit.q, unit.r)) {
       const score = scoreCell(game, unit, option, reach, caution, rng);
@@ -125,11 +149,11 @@
   /**
    * The CPU's next move this turn, or null when it is done moving.
    * Returns { type: 'move', from, to }. Units that decide to hold their
-   * position are marked as moved so they are not asked again.
+   * position are marked `held` so they are not asked again this turn.
    */
   function nextAction(game, rng = Math.random) {
     if (game.winner) return null;
-    const queue = G.unmovedPieces(game).sort(
+    const queue = G.unmovedPieces(game).filter((u) => !u.held).sort(
       (a, b) => G.hexDistance(a, game.keep) - G.hexDistance(b, game.keep) || a.id - b.id
     );
     for (const unit of queue) {
@@ -137,7 +161,7 @@
       if (option) {
         return { type: 'move', from: { q: unit.q, r: unit.r }, to: { q: option.q, r: option.r } };
       }
-      unit.moved = true; // holding position
+      unit.held = true; // holding position (still free to fire)
     }
     return null;
   }

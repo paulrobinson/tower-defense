@@ -207,3 +207,81 @@ test('moves and attacks are recorded for the turn and kept as lastTurn', () => {
   assert.equal(game.lastTurn.moves.length, 1);
   assert.equal(game.current.moves.length, 0);
 });
+
+test('artillery that moved this turn does not fire; soldiers still do', () => {
+  const game = emptyGame();
+  const art = put(game, G.ATTACKER, 'artillery', 8, 0);
+  const sol = put(game, G.ATTACKER, 'soldier', 6, -3);
+  const target = put(game, G.DEFENDER, 'soldier', 5, 0); // in range of the artillery after it moves
+  const target2 = put(game, G.DEFENDER, 'soldier', 4, -2); // next to where the soldier moves
+  G.move(game, art, { q: 7, r: 0 });
+  G.move(game, sol, { q: 5, r: -2 });
+  assert.equal(G.canFire(art), false);
+  assert.equal(G.canFire(sol), true);
+  G.endTurn(game);
+  assert.equal(target.hp, 10, 'moved artillery held its fire');
+  assert.ok(target2.hp < 10, 'moved soldier still attacked');
+  assert.ok(game.lastTurn.attacks.every((a) => a.attackerId !== art.id));
+});
+
+test('artillery that stays put fires', () => {
+  const game = emptyGame();
+  put(game, G.ATTACKER, 'artillery', 8, 0);
+  const target = put(game, G.DEFENDER, 'soldier', 5, 0);
+  G.endTurn(game);
+  assert.ok(target.hp < 10);
+});
+
+test('a move can be undone before the turn ends', () => {
+  const game = emptyGame();
+  const s = put(game, G.ATTACKER, 'soldier', 8, 0);
+  G.move(game, s, { q: 6, r: 0 });
+  assert.ok(G.canUndo(game));
+  const res = G.undoMove(game);
+  assert.ok(res.ok);
+  assert.deepEqual([s.q, s.r], [8, 0]);
+  assert.equal(s.moved, false);
+  assert.equal(G.pieceAt(game, 6, 0), null);
+  assert.equal(game.current.moves.length, 0);
+  assert.ok(G.move(game, s, { q: 7, r: 0 }).ok, 'it can move again');
+});
+
+test("undoing a unit's move lets artillery fire again", () => {
+  const game = emptyGame();
+  const art = put(game, G.ATTACKER, 'artillery', 8, 0);
+  const target = put(game, G.DEFENDER, 'soldier', 5, 0);
+  G.move(game, art, { q: 8, r: -2 });
+  G.undoMove(game, art.id);
+  assert.ok(G.canFire(art));
+  G.endTurn(game);
+  assert.ok(target.hp < 10);
+});
+
+test("any unit's move can be undone, unless another unit now stands where it started", () => {
+  const game = emptyGame();
+  const a = put(game, G.ATTACKER, 'soldier', 8, 0);
+  const b = put(game, G.ATTACKER, 'soldier', -8, 0);
+  G.move(game, a, { q: 7, r: 0 });
+  G.move(game, b, { q: -7, r: 0 });
+  assert.ok(G.undoMove(game, a.id).ok, 'undo the earlier move, not just the latest');
+  assert.deepEqual([a.q, a.r], [8, 0]);
+  assert.deepEqual([b.q, b.r], [-7, 0], 'other move untouched');
+
+  const c = put(game, G.ATTACKER, 'soldier', 4, 0);
+  const d = put(game, G.ATTACKER, 'soldier', 2, 0);
+  G.move(game, c, { q: 3, r: 1 }); // c leaves (4,0)
+  G.move(game, d, { q: 4, r: 0 }); // d steps into c's old cell
+  assert.equal(G.canUndo(game, c.id), false);
+  assert.equal(G.undoMove(game, c.id).ok, false);
+  assert.ok(G.undoMove(game, d.id).ok);
+  assert.ok(G.undoMove(game, c.id).ok, 'possible once the cell is free');
+});
+
+test('moves cannot be undone after the turn ends', () => {
+  const game = emptyGame();
+  const s = put(game, G.ATTACKER, 'soldier', 8, 0);
+  G.move(game, s, { q: 6, r: 0 });
+  G.endTurn(game);
+  G.endTurn(game);
+  assert.equal(G.undoMove(game, s.id).ok, false);
+});

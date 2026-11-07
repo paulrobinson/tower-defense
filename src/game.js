@@ -12,9 +12,11 @@
  *      empty edge cell, defenders on a random empty cell near the keep.
  *   2. The player may move every one of their units once, up to the unit's
  *      move distance, through empty cells.
+ *      Moves can be undone until the turn ends.
  *   3. When the turn ends, each of that player's units attacks one enemy in
  *      its attack radius (attackers may target the keep). Damage is random,
  *      scaled by attack power / defence power. Units at 0 HP die.
+ *      Artillery that moved this turn does not fire.
  */
 (function (root, factory) {
   const api = factory();
@@ -30,8 +32,8 @@
   const ATTACKER = 'attacker';
 
   const UNITS = {
-    soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10 },
-    artillery: { name: 'Artillery', move: 3, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10 },
+    soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10, firesAfterMoving: true },
+    artillery: { name: 'Artillery', move: 3, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false },
   };
 
   const CONFIG = {
@@ -131,6 +133,7 @@
       winner: null,
       log: [],
       nextId: 1,
+      damageDealt: { [ATTACKER]: 0, [DEFENDER]: 0 }, // running totals, for the CPU
       current: null, // what has happened during the current turn
       lastTurn: null, // the record of the previous turn
     };
@@ -174,6 +177,7 @@
     for (const p of game.pieces.values()) {
       p.moved = false;
       p.fired = false;
+      p.held = false;
     }
     for (let i = 0; i < game.config.entriesPerTurn; i++) {
       if (!game.pools[player].length) break;
@@ -262,10 +266,15 @@
     return best && { keep: false, unit: best, q: best.q, r: best.r };
   }
 
+  /** Can this unit fire this turn? Artillery that has moved cannot. */
+  function canFire(unit) {
+    return !(unit.moved && !UNITS[unit.type].firesAfterMoving);
+  }
+
   /** The current player's units that will attack when the turn ends, in firing order. */
   function firingOrder(game) {
     return piecesOf(game, game.turn)
-      .filter((u) => !u.fired)
+      .filter((u) => !u.fired && canFire(u))
       .sort((a, b) => a.id - b.id);
   }
 
@@ -276,6 +285,7 @@
   function fire(game, unit) {
     if (game.winner || unit.fired || unit.owner !== game.turn) return null;
     unit.fired = true;
+    if (!canFire(unit)) return null;
     const target = chooseTarget(game, unit);
     if (!target) return null;
 
@@ -312,6 +322,7 @@
           (event.killed ? ' and destroyed it' : ` (${victim.hp} HP left)`)
       );
     }
+    game.damageDealt[unit.owner] += event.damage;
     game.current.attacks.push(event);
     checkWinner(game);
     return event;
@@ -346,15 +357,50 @@
       return fail(`${stats(unit).name} can move up to ${stats(unit).move} cells through empty spaces.`);
     }
 
-    game.pieces.delete(key(from.q, from.r));
+    const start = pos(unit); // copy before moving: `from` may be the unit itself
+    game.pieces.delete(key(start.q, start.r));
     unit.q = to.q;
     unit.r = to.r;
     unit.moved = true;
     game.pieces.set(key(to.q, to.r), unit);
 
-    const record = { unitId: unit.id, owner: unit.owner, from: pos(from), path: target.path.map(pos) };
+    const record = { unitId: unit.id, owner: unit.owner, from: start, path: target.path.map(pos) };
     game.current.moves.push(record);
     return { ok: true, record };
+  }
+
+  /**
+   * Undo a move made this turn: the given unit's move, or the most recent
+   * move if no unit id is given. The unit goes back where it started and
+   * may move (and, for artillery, fire) again. Fails if another unit is now
+   * standing where it started.
+   */
+  function undoMove(game, unitId) {
+    if (game.winner) return fail('The game is over.');
+    const moves = game.current.moves;
+    const index = unitId === undefined ? moves.length - 1 : moves.findIndex((m) => m.unitId === unitId);
+    if (index < 0) return fail(unitId === undefined ? 'There are no moves to undo.' : "That unit hasn't moved this turn.");
+    const record = moves[index];
+    const end = record.path[record.path.length - 1];
+    const unit = pieceAt(game, end.q, end.r);
+    if (!unit || unit.id !== record.unitId) return fail('That move can no longer be undone.');
+    const blocker = pieceAt(game, record.from.q, record.from.r);
+    if (blocker) return fail('Another unit is standing where this one started. Undo that unit first.');
+
+    game.pieces.delete(key(end.q, end.r));
+    unit.q = record.from.q;
+    unit.r = record.from.r;
+    unit.moved = false;
+    game.pieces.set(key(unit.q, unit.r), unit);
+    moves.splice(index, 1);
+    return { ok: true, record, unit };
+  }
+
+  /** Can the given unit's move (or the latest move) be undone right now? */
+  function canUndo(game, unitId) {
+    const moves = game.current.moves;
+    const record = unitId === undefined ? moves[moves.length - 1] : moves.find((m) => m.unitId === unitId);
+    return !!record && !pieceAt(game, record.from.q, record.from.r);
   }
 
   /** Units belonging to the current player that can still move. */
@@ -407,6 +453,9 @@
     firingOrder,
     fire,
     move,
+    undoMove,
+    canUndo,
+    canFire,
     endTurn,
     capitalise,
     other,

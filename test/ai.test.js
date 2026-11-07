@@ -87,3 +87,13 @@ test('a full CPU-vs-CPU game always finishes with a winner', () => {
     assert.ok(game.winner, `seed ${seed} has a winner`);
   }
 });
+
+test('CPU artillery already in range of the keep stays put and fires', () => {
+  const game = emptyGame();
+  game.pools.attacker = [];
+  const a = put(game, G.ATTACKER, 'artillery', 4, 0);
+  playMoves(game, seeded(6));
+  assert.deepEqual([a.q, a.r], [4, 0]);
+  G.endTurn(game);
+  assert.ok(game.keep.hp < game.keep.maxHp);
+});

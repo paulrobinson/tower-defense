@@ -40,7 +40,8 @@
         <p id="message" class="message" role="status"></p>
 
         <div class="buttons">
-          <button id="end-btn" type="button">End turn &amp; fire</button>
+          <button id="undo-btn" type="button">Undo last move</button>
+          <button id="end-btn" type="button" class="primary">End turn &amp; fire</button>
           <button id="new-btn" type="button">New game</button>
         </div>
 
@@ -50,16 +51,18 @@
           </thead>
           <tbody>
             <tr><th scope="row">Soldier</th><td>2</td><td>2</td><td>2</td><td>1</td><td>10</td></tr>
-            <tr><th scope="row">Artillery</th><td>3</td><td>5</td><td>1</td><td>2–4</td><td>10</td></tr>
+            <tr><th scope="row">Artillery</th><td>3</td><td>5</td><td>1</td><td>2–4*</td><td>10</td></tr>
           </tbody>
         </table>
+        <p class="footnote">* Artillery can't fire on a turn it moves.</p>
 
         <details class="rules" open>
           <summary>How to play</summary>
           <ul>
             <li>You are the <span class="swatch defender"></span> defenders (circles). The CPU plays the <span class="swatch attacker"></span> attackers (triangles) and goes first.</li>
             <li>Each side has 12 units: 3 artillery (crosshair) and 9 soldiers (sword). One enters at random each turn: yours near the keep, theirs on the edge.</li>
-            <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range.</li>
+            <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range. Artillery that moved this turn holds its fire.</li>
+            <li>Changed your mind? <strong>Undo</strong> takes back the latest move (Ctrl/⌘+Z), or the selected unit's move, any time before you end the turn.</li>
             <li>Damage is random, averaging 3 × attack ÷ defence. A unit at 0 HP is destroyed.</li>
             <li>Units can't move through other units or the keep.</li>
             <li>Attackers win by destroying the keep (40 HP, defence 4). You win by destroying all 12 attackers.</li>

@@ -27,6 +27,7 @@
     message: document.getElementById('message'),
     log: document.getElementById('log'),
     endBtn: document.getElementById('end-btn'),
+    undoBtn: document.getElementById('undo-btn'),
     newBtn: document.getElementById('new-btn'),
   };
 
@@ -351,6 +352,7 @@
     // Aim lines: who your units will fire at when you end the turn.
     if (myTurn) {
       for (const unit of G.piecesOf(game, HUMAN)) {
+        if (!G.canFire(unit)) continue;
         const target = G.chooseTarget(game, unit);
         if (!target) continue;
         const a = toPixel(unit);
@@ -486,6 +488,10 @@
     els.keepHp.textContent = `${game.keep.hp} / ${game.keep.maxHp}`;
     els.message.textContent = message;
     els.endBtn.disabled = busy || !!game.winner || game.turn !== HUMAN;
+    const undoUnit = undoTarget();
+    els.undoBtn.textContent = undoUnit ? 'Undo this move' : 'Undo last move';
+    els.undoBtn.disabled =
+      busy || !!game.winner || game.turn !== HUMAN || !G.canUndo(game, undoUnit ? undoUnit.id : undefined);
 
     els.log.replaceChildren();
     for (const entry of [...game.log].reverse().slice(0, 120)) {
@@ -501,8 +507,50 @@
     const s = G.UNITS[unit.type];
     const whose = unit.owner === HUMAN ? 'Your' : 'Enemy';
     const range = s.minRange === s.maxRange ? `${s.maxRange} cell` : `${s.minRange}–${s.maxRange} cells`;
-    return `${whose} ${s.name.toLowerCase()}: ${unit.hp}/${unit.maxHp} HP, moves ${s.move}, ` +
+    let text = `${whose} ${s.name.toLowerCase()}: ${unit.hp}/${unit.maxHp} HP, moves ${s.move}, ` +
       `attack ${s.attack}, defence ${s.defence}, hits targets ${range} away.`;
+    if (!s.firesAfterMoving) text += ` It can't fire on a turn it moves.`;
+    if (unit.owner === HUMAN && game.turn === HUMAN && unit.moved) {
+      text += G.canFire(unit) ? ' It has moved this turn.' : ' It has moved this turn, so it won\'t fire.';
+      text += G.canUndo(game, unit.id) ? ' Press Undo this move to put it back.' : '';
+    }
+    return text;
+  }
+
+  /** The selected unit, if it's one of yours that moved this turn. */
+  function undoTarget() {
+    const unit = selected && G.pieceAt(game, selected.q, selected.r);
+    return unit && unit.owner === HUMAN && unit.moved ? unit : null;
+  }
+
+  /** Undo the selected unit's move, or the latest move. Animates the unit back. */
+  async function undo() {
+    if (busy || game.winner || game.turn !== HUMAN) return;
+    const target = undoTarget();
+    const moves = game.current.moves;
+    const record = target ? moves.find((m) => m.unitId === target.id) : moves[moves.length - 1];
+    if (!record) return;
+    if (!G.canUndo(game, record.unitId)) {
+      message = 'Another unit is standing where this one started. Undo that unit first.';
+      render();
+      return;
+    }
+    busy = true;
+    selected = null;
+    render();
+    const unit = game.pieces.get(G.key(record.path[record.path.length - 1].q, record.path[record.path.length - 1].r));
+    const back = [...record.path].reverse().concat([record.from]);
+    const node = unit && scene.querySelector(`[data-id="${unit.id}"]`);
+    if (node && TIMING.human > 0) await tween(node, toPixel(back[0]), back.map(toPixel), TIMING.human);
+    const res = G.undoMove(game, record.unitId);
+    busy = false;
+    if (res.ok) {
+      selected = { q: res.unit.q, r: res.unit.r };
+      message = `Move undone. ${describeUnit(res.unit)}`;
+    } else {
+      message = res.reason;
+    }
+    render();
   }
 
   function yourTurnMessage() {
@@ -548,7 +596,6 @@
       } else {
         selected = { q, r };
         message = describeUnit(unit);
-        if (unit.owner === HUMAN && unit.moved) message += ' It has already moved this turn.';
       }
       render();
       return;
@@ -563,7 +610,7 @@
 
     if (selectedUnit && selectedUnit.owner === HUMAN) {
       message = selectedUnit.moved
-        ? 'That unit has already moved this turn.'
+        ? 'That unit has already moved this turn. Press Undo this move to move it again.'
         : `That's out of reach. ${G.UNITS[selectedUnit.type].name} moves up to ${G.UNITS[selectedUnit.type].move} cells through empty spaces.`;
     } else {
       selected = null;
@@ -573,9 +620,16 @@
   }
 
   els.endBtn.addEventListener('click', endHumanTurn);
+  els.undoBtn.addEventListener('click', undo);
   els.newBtn.addEventListener('click', newGame);
 
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      selected = null; // Ctrl/Cmd+Z always undoes the latest move
+      undo();
+      return;
+    }
     if (e.key === 'Escape' && selected && !busy) {
       selected = null;
       message = game.turn === HUMAN ? yourTurnMessage() : '';

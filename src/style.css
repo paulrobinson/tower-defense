@@ -223,9 +223,10 @@ main {
 
 .message { min-height: 2.6em; margin: 8px 0; color: var(--muted); }
 
-.buttons { display: flex; gap: 8px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.footnote { margin: 4px 0 0; font-size: 0.75rem; color: var(--muted); }
 button {
-  flex: 1;
+  flex: 1 1 auto;
   font: inherit;
   padding: 8px 12px;
   border-radius: 8px;
@@ -235,6 +236,8 @@ button {
   cursor: pointer;
 }
 button:hover:not(:disabled) { border-color: var(--text); }
+button.primary { background: var(--defender); border-color: var(--defender); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { border-color: var(--text); }
 button:focus-visible { outline: 2px solid var(--select); outline-offset: 2px; }
 button:disabled { opacity: 0.5; cursor: default; }
 
