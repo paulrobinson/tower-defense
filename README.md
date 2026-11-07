@@ -15,31 +15,37 @@ npm start        # serves on http://localhost:8080
 You play the defenders. The CPU plays the attackers.
 
 - The board is a roughly circular hex grid, 17 cells across at its widest.
-- The defender's **keep** sits in the centre (5 HP).
-- Attackers go first. On a turn a player may move **every** one of their pieces once,
-  each up to **2 cells** through empty spaces, then ends the turn.
-- At the start of each defender turn a new defender appears next to the keep,
-  on the side facing the nearest attacker.
-- Each attacker turn, one new attacker enters on an edge cell (12 in total).
-- Moving onto an enemy piece captures it. An attacker that reaches the keep strikes it for 1 damage
-  and stops beside it.
-- **Attackers win** by destroying the keep.
-- **Defenders win** by destroying every attacking piece, both on the board and in reserve.
-- Blue arrows show your moves this turn. Grey arrows and rings show the CPU's last turn.
+- The defender's **keep** sits in the centre (40 HP, defence 4).
+- Each side has 12 units: 3 artillery and 9 soldiers.
 
-All the numbers are in `CONFIG` in `src/game.js`.
+| Unit      | Move | Attack | Defence | Attack radius | HP |
+|-----------|------|--------|---------|---------------|----|
+| Soldier   | 2    | 2      | 2       | 1             | 10 |
+| Artillery | 3    | 5      | 1       | 2–4           | 10 |
+
+Each turn:
+
+1. One unit, picked at random from the player's remaining units, enters the board:
+   attackers on a random empty edge cell, defenders on a random empty cell within 3 of the keep.
+2. The player moves any or all of their units once each, through empty cells.
+   Units can't move onto other units or the keep.
+3. When the turn ends, each of that player's units attacks one enemy within its attack radius.
+   Attackers always prefer the keep; otherwise a unit targets the enemy closest to dying.
+   Damage is random: 3 × attack ÷ defence, scaled by a random factor between 0.5 and 1.5.
+   A unit at 0 HP is destroyed.
+
+**Attackers win** by destroying the keep. **Defenders win** by destroying all 12 attackers.
+
+All the numbers are in `UNITS` and `CONFIG` in `src/game.js`.
 
 ## CPU attacker
 
-`src/ai.js` plays one action at a time, so the UI can animate each one.
+`src/ai.js` moves one unit at a time, so the UI can animate each move. Each unit scores every cell it
+can reach by the damage it could deal from there at the end of the turn, the damage enemies could do
+to it there next turn, and its position: soldiers close in on the keep, artillery sits 2–4 cells away.
 
-- **Gather:** bring pieces in on the edge where the route to the keep is least defended,
-  then creep towards the keep, staying out of every defender's reach and close together.
-- **Assault:** once 5 attackers are on the board (or the reserve is empty), charge together,
-  striking the keep whenever possible and capturing defenders on the way.
-  If the assault is broken, go back to gathering.
-
-The scoring weights are in `WEIGHTS` in `src/ai.js`.
+Until 5 attackers are on the board it gathers, staying out of reach. Then it commits and
+cares much less about losses. The weights are in `WEIGHTS` in `src/ai.js`.
 
 ## Code layout
 

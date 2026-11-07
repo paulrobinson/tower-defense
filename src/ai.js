@@ -1,26 +1,27 @@
 /*
- * CPU player for the attacking side.
+ * CPU player.
  *
- * The CPU plays one action at a time so the UI can animate each one:
- * call `nextAction(game)` repeatedly, apply what it returns, and stop when
- * it returns null (then end the turn).
+ * The CPU plays one move at a time so the UI can animate each one: call
+ * `nextAction(game)` repeatedly, apply what it returns, and stop when it
+ * returns null. Units fire automatically when the turn ends.
  *
- * Strategy, in short. Defenders capture anything that comes within reach
- * and are reinforced every turn, so attacking one piece at a time just
- * feeds them. The CPU therefore works in two phases:
+ * It can play either side (the game uses it for the attackers; tests use it
+ * for both). Each unit, nearest the keep first, scores every cell it can
+ * reach plus staying put:
  *
- *   Gather: bring pieces in on the edge where the route to the keep is
- *     least defended, then creep them towards the keep while staying out
- *     of every defender's reach and close to each other.
- *   Assault: once enough attackers are on the board (or the reserve is
- *     empty), every piece charges together. Losses are ignored; the
- *     survivors recapture and strike the keep.
+ *   Offence: the average damage it could deal from there at the end of this
+ *     turn. Damage to the keep counts extra for attackers, and a likely kill
+ *     earns a bonus.
+ *   Danger: the average damage enemy units could deal to it there next turn,
+ *     given where they can move, measured against its remaining HP. Losing
+ *     a unit outright costs extra.
+ *   Position: attacking soldiers want to close in on the keep; attacking
+ *     artillery wants to sit 2 to 4 cells from it, in firing range.
+ *     Defenders want to stay near the keep.
  *
- * In both phases each piece, nearest the keep first, scores every cell it
- * can reach: striking the keep beats everything, captures are good
- * (especially next to the keep), and getting closer is good. If the
- * assault is broken (one attacker or fewer left with more in reserve),
- * the CPU goes back to gathering.
+ * Attackers gather before committing: until enough units are on the board
+ * (or the reserve is empty) they weigh danger heavily and hang back. Once
+ * committed they care much less about losses and press the assault.
  */
 (function (root, factory) {
   const api = factory(root.TDGame || (typeof require !== 'undefined' ? require('./game.js') : null));
@@ -33,190 +34,113 @@
   'use strict';
 
   const WEIGHTS = {
-    keepStrike: 1000,
-    capture: 60,
-    captureNextToKeep: 40,
-    perStepCloser: 10,
-    threatened: 45,
-    supportedThreatFactor: 0.4, // threat penalty multiplier when a friend can recapture
-    gatherThreatened: 200, // while gathering, avoid danger almost at any cost
-    cohesion: 4, // while gathering, per cell away from the group's centre
-    assaultSize: 5, // attackers on board needed to launch an assault
-    jitter: 4,
-    // Placement
-    corridorDefender: 8,
-    placementThreatened: 50,
-    nearFriend: 6,
-    placementJitter: 6,
+    damage: 3, // per point of expected damage dealt to a unit
+    keepDamage: 6, // per point of expected damage dealt to the keep (attackers)
+    kill: 15, // bonus when the shot is likely to destroy the target
+    danger: 30, // per fraction of own HP expected to be lost
+    death: 25, // extra when expected damage would destroy the unit
+    advance: 4, // attackers: per cell away from where they want to be
+    home: 4, // defenders: per cell beyond the guard ring
+    guardRing: 4, // defenders: how far from the keep they like to roam
+    gatherSize: 5, // attackers on board before they commit
+    gatherCaution: 2.5, // danger multiplier while gathering
+    assaultCaution: 0.25, // danger multiplier once committed
+    jitter: 2,
   };
 
-  /**
-   * Would any piece of `byOwner` be able to land on `cell` on their next
-   * turn? `board` is the game with hypothetical changes already applied.
-   */
-  function threatenedBy(board, cell, byOwner) {
-    for (const p of G.piecesOf(board, byOwner)) {
-      if (G.hexDistance(p, cell) > board.config.maxMove) continue;
-      if (G.reachable(board, p.q, p.r).some((t) => G.samePos(t, cell) && t.kind !== 'attack-keep')) {
-        return true;
+  /** Cells from which each enemy could fire next turn (their reach plus where they stand). */
+  function enemyReach(game, owner) {
+    return G.piecesOf(game, G.other(owner)).map((e) => ({
+      unit: e,
+      cells: [{ q: e.q, r: e.r }, ...G.reachable(game, e.q, e.r)],
+    }));
+  }
+
+  function expectedIncoming(game, unit, cell, reach) {
+    const defence = G.UNITS[unit.type].defence;
+    let total = 0;
+    for (const { unit: e, cells } of reach) {
+      if (cells.some((c) => G.inAttackRange(e.type, G.hexDistance(c, cell)))) {
+        total += G.expectedDamage(game, e.type, defence);
       }
     }
-    return false;
+    return total;
   }
 
-  /** A shallow copy of the board with a different set of pieces. */
-  function withPieces(game, mutate) {
-    const pieces = new Map();
-    for (const [k, p] of game.pieces) pieces.set(k, { ...p });
-    const copy = { ...game, pieces };
-    mutate(copy);
-    return copy;
+  function offenceScore(game, unit, cell) {
+    const target = G.chooseTarget(game, unit, cell);
+    if (!target) return 0;
+    if (target.keep) {
+      return G.expectedDamage(game, unit.type, game.config.keepDefence) * WEIGHTS.keepDamage;
+    }
+    const dmg = G.expectedDamage(game, unit.type, G.UNITS[target.unit.type].defence);
+    let score = Math.min(dmg, target.unit.hp) * WEIGHTS.damage;
+    if (dmg >= target.unit.hp) score += WEIGHTS.kill;
+    return score;
   }
 
-  /**
-   * Decide (and remember on the game) whether the CPU is gathering or
-   * assaulting this turn.
-   */
-  function updatePhase(game) {
-    const state = (game.ai = game.ai || { assault: false, turn: null });
-    if (state.turn === game.turnNumber) return state;
-    state.turn = game.turnNumber;
+  function positionScore(game, unit, cell) {
+    const d = G.hexDistance(cell, game.keep);
+    if (unit.owner === G.ATTACKER) {
+      if (unit.type === 'artillery') {
+        const s = G.UNITS.artillery;
+        return -WEIGHTS.advance * (Math.max(0, d - s.maxRange) + Math.max(0, s.minRange - d));
+      }
+      return -WEIGHTS.advance * Math.max(0, d - 1);
+    }
+    return -WEIGHTS.home * Math.max(0, d - WEIGHTS.guardRing);
+  }
+
+  function isGathering(game, owner) {
+    if (owner !== G.ATTACKER) return false;
     const onBoard = G.piecesOf(game, G.ATTACKER).length;
-    const reserve = game.reserves[G.ATTACKER];
-    if (!state.assault && (onBoard >= WEIGHTS.assaultSize || (reserve === 0 && onBoard > 0))) {
-      state.assault = true;
-    } else if (state.assault && onBoard <= 1 && reserve > 0) {
-      state.assault = false;
-    }
-    return state;
+    return onBoard < WEIGHTS.gatherSize && game.pools[G.ATTACKER].length > 0;
   }
 
-  function centreOf(pieces) {
-    if (!pieces.length) return null;
-    const x = pieces.reduce((s, p) => s + p.q + p.r / 2, 0) / pieces.length;
-    const y = pieces.reduce((s, p) => s + p.r, 0) / pieces.length;
-    return { q: x - y / 2, r: y };
+  function scoreCell(game, unit, cell, reach, caution, rng) {
+    const incoming = expectedIncoming(game, unit, cell, reach);
+    let danger = (incoming / unit.hp) * WEIGHTS.danger;
+    if (incoming >= unit.hp) danger += WEIGHTS.death;
+    return (
+      offenceScore(game, unit, cell) +
+      positionScore(game, unit, cell) -
+      danger * caution +
+      rng() * WEIGHTS.jitter
+    );
   }
 
-  function axialEuclid(a, b) {
-    const dx = a.q + a.r / 2 - (b.q + b.r / 2);
-    const dy = ((a.r - b.r) * Math.sqrt(3)) / 2;
-    return Math.hypot(dx, dy);
-  }
-
-  // ---------- placement ----------
-
-  function scorePlacement(game, cell, rng) {
-    const keep = game.keep;
-    const toKeep = G.hexDistance(cell, keep);
-    let score = -2 * toKeep;
-
-    // Defenders sitting on (or near) the shortest route to the keep.
-    for (const d of G.piecesOf(game, G.DEFENDER)) {
-      if (G.hexDistance(cell, d) + G.hexDistance(d, keep) <= toKeep + 2) {
-        score -= WEIGHTS.corridorDefender;
-      }
-    }
-
-    const board = withPieces(game, (b) => {
-      b.pieces.set(G.key(cell.q, cell.r), { id: -1, owner: G.ATTACKER, q: cell.q, r: cell.r });
-    });
-    if (threatenedBy(board, cell, G.DEFENDER)) score -= WEIGHTS.placementThreatened;
-
-    // Join the existing group so pieces arrive together.
-    const friends = G.piecesOf(game, G.ATTACKER);
-    const centre = centreOf(friends);
-    if (centre) score -= axialEuclid(cell, centre) * WEIGHTS.nearFriend * 0.5;
-
-    return score + rng() * WEIGHTS.placementJitter;
-  }
-
-  function choosePlacement(game, rng = Math.random) {
-    let best = null;
-    for (const cell of G.placementCells(game, G.ATTACKER)) {
-      const score = scorePlacement(game, cell, rng);
-      if (!best || score > best.score) best = { cell, score };
-    }
-    return best && best.cell;
-  }
-
-  // ---------- movement ----------
-
-  /** Score finishing a move at `option` (or staying put when option is null). */
-  function scoreOption(game, piece, option, ctx, rng) {
-    const end = option ? option.end : piece;
-    let score = -WEIGHTS.perStepCloser * G.hexDistance(end, game.keep);
-
-    if (option && option.kind === 'attack-keep') score += WEIGHTS.keepStrike;
-    if (option && option.kind === 'capture') {
-      score += WEIGHTS.capture;
-      if (G.hexDistance(option, game.keep) === 1) score += WEIGHTS.captureNextToKeep;
-    }
-
-    const board = withPieces(game, (b) => {
-      b.pieces.delete(G.key(piece.q, piece.r));
-      if (option && option.kind === 'capture') b.pieces.delete(G.key(option.q, option.r));
-      b.pieces.set(G.key(end.q, end.r), { ...piece, q: end.q, r: end.r });
-    });
-
-    if (threatenedBy(board, end, G.DEFENDER)) {
-      // Could another attacker take the square back if we are captured?
-      const supported = G.piecesOf(board, G.ATTACKER).some(
-        (a) => a.id !== piece.id && G.hexDistance(a, end) <= game.config.maxMove + 1
-      );
-      if (!ctx.assault) {
-        score -= supported ? WEIGHTS.threatened : WEIGHTS.gatherThreatened;
-      } else if (!supported) {
-        score -= WEIGHTS.threatened * WEIGHTS.supportedThreatFactor;
-      }
-    }
-
-    // While gathering, keep the group together.
-    if (!ctx.assault && ctx.centre) score -= axialEuclid(end, ctx.centre) * WEIGHTS.cohesion;
-
-    return score + rng() * WEIGHTS.jitter;
-  }
-
-  function chooseMove(game, piece, rng = Math.random) {
-    const state = updatePhase(game);
-    const others = G.piecesOf(game, G.ATTACKER).filter((a) => a.id !== piece.id);
-    const ctx = { assault: state.assault, centre: centreOf(others) };
-    let best = { option: null, score: scoreOption(game, piece, null, ctx, rng) };
-    for (const option of G.movesFor(game, piece.q, piece.r)) {
-      const score = scoreOption(game, piece, option, ctx, rng);
+  /** The best destination for `unit`, or null to stay put. */
+  function chooseMove(game, unit, rng = Math.random) {
+    const reach = enemyReach(game, unit.owner);
+    const caution = unit.owner !== G.ATTACKER ? 1
+      : isGathering(game, unit.owner) ? WEIGHTS.gatherCaution : WEIGHTS.assaultCaution;
+    let best = { option: null, score: scoreCell(game, unit, unit, reach, caution, rng) };
+    for (const option of G.movesFor(game, unit.q, unit.r)) {
+      const score = scoreCell(game, unit, option, reach, caution, rng);
       if (score > best.score) best = { option, score };
     }
-    return best.option; // null means "stay where you are"
+    return best.option;
   }
 
   /**
-   * The CPU's next action this turn, or null when it is done.
-   * Returns { type: 'place', cell } or { type: 'move', from, to }.
-   * Pieces that decide to hold their position are marked as having
-   * moved so they are not asked again.
+   * The CPU's next move this turn, or null when it is done moving.
+   * Returns { type: 'move', from, to }. Units that decide to hold their
+   * position are marked as moved so they are not asked again.
    */
   function nextAction(game, rng = Math.random) {
-    if (game.winner || game.turn !== G.ATTACKER) return null;
-    updatePhase(game);
-
-    if (G.placementsLeft(game) > 0) {
-      const cell = choosePlacement(game, rng);
-      if (cell) return { type: 'place', cell: { q: cell.q, r: cell.r } };
-    }
-
-    // Nearest the keep first, so the front line clears space for followers.
+    if (game.winner) return null;
     const queue = G.unmovedPieces(game).sort(
-      (a, b) => G.hexDistance(a, game.keep) - G.hexDistance(b, game.keep)
+      (a, b) => G.hexDistance(a, game.keep) - G.hexDistance(b, game.keep) || a.id - b.id
     );
-    for (const piece of queue) {
-      const option = chooseMove(game, piece, rng);
+    for (const unit of queue) {
+      const option = chooseMove(game, unit, rng);
       if (option) {
-        return { type: 'move', from: { q: piece.q, r: piece.r }, to: { q: option.q, r: option.r } };
+        return { type: 'move', from: { q: unit.q, r: unit.r }, to: { q: option.q, r: option.r } };
       }
-      piece.moved = true; // holding position
+      unit.moved = true; // holding position
     }
     return null;
   }
 
-  return { WEIGHTS, choosePlacement, chooseMove, nextAction, threatenedBy, updatePhase };
+  return { WEIGHTS, chooseMove, nextAction, expectedIncoming };
 });

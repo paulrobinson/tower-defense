@@ -22,16 +22,14 @@
 
         <div class="stats">
           <div class="stat defender">
-            <span class="label">Your defenders</span>
+            <span class="label">Your units</span>
             <span id="def-count" class="value"></span>
+            <span class="sub">+<span id="def-reserve"></span> to come</span>
           </div>
           <div class="stat attacker">
-            <span class="label">Attackers on board</span>
+            <span class="label">Attackers</span>
             <span id="att-count" class="value"></span>
-          </div>
-          <div class="stat attacker">
-            <span class="label">Attackers in reserve</span>
-            <span id="att-reserve" class="value"></span>
+            <span class="sub">+<span id="att-reserve"></span> to come</span>
           </div>
           <div class="stat keep">
             <span class="label">Keep HP</span>
@@ -42,22 +40,31 @@
         <p id="message" class="message" role="status"></p>
 
         <div class="buttons">
-          <button id="end-btn" type="button">End turn</button>
+          <button id="end-btn" type="button">End turn &amp; fire</button>
           <button id="new-btn" type="button">New game</button>
         </div>
+
+        <table class="units">
+          <thead>
+            <tr><th scope="col">Unit</th><th scope="col">Move</th><th scope="col">Attack</th><th scope="col">Defence</th><th scope="col">Range</th><th scope="col">HP</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Soldier</th><td>2</td><td>2</td><td>2</td><td>1</td><td>10</td></tr>
+            <tr><th scope="row">Artillery</th><td>3</td><td>5</td><td>1</td><td>2–4</td><td>10</td></tr>
+          </tbody>
+        </table>
 
         <details class="rules" open>
           <summary>How to play</summary>
           <ul>
-            <li>You are the <span class="swatch defender"></span> defenders. The CPU plays the <span class="swatch attacker"></span> attackers and goes first.</li>
-            <li>On your turn, move any or all of your pieces up to 2 cells each, then press <strong>End turn</strong>.</li>
-            <li>A new defender appears next to the keep at the start of each of your turns.</li>
-            <li>Each turn the attackers bring one piece in from the edge (12 in total), then move theirs.</li>
-            <li>Moving onto an enemy piece captures it. Pieces can't pass through other pieces.</li>
-            <li>An attacker that reaches the keep strikes it for 1 damage.</li>
-            <li>Attackers win by destroying the keep. You win by destroying every attacker.</li>
+            <li>You are the <span class="swatch defender"></span> defenders (circles). The CPU plays the <span class="swatch attacker"></span> attackers (triangles) and goes first.</li>
+            <li>Each side has 12 units: 3 artillery (crosshair) and 9 soldiers (sword). One enters at random each turn: yours near the keep, theirs on the edge.</li>
+            <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range.</li>
+            <li>Damage is random, averaging 3 × attack ÷ defence. A unit at 0 HP is destroyed.</li>
+            <li>Units can't move through other units or the keep.</li>
+            <li>Attackers win by destroying the keep (40 HP, defence 4). You win by destroying all 12 attackers.</li>
           </ul>
-          <p class="hint">Blue arrows show your moves this turn. Grey arrows and rings show what the attackers did last turn. Press Esc to cancel a selection.</p>
+          <p class="hint">Click a unit to see its moves and attack range; hover a destination to preview the range from there. Dotted lines show who your units will fire at. Grey arrows show the attackers' last moves.</p>
         </details>
 
         <h2>Log</h2>

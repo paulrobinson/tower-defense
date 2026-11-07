@@ -1,4 +1,4 @@
-/* Browser UI: renders the game as SVG, handles clicks and runs the CPU. */
+/* Browser UI: renders the game as SVG, handles clicks, animates combat and runs the CPU. */
 (function () {
   'use strict';
 
@@ -13,13 +13,14 @@
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const TIMING = reducedMotion
-    ? { think: 600, place: 150, step: 60, pause: 120, human: 0 }
-    : { think: 1800, place: 450, step: 220, pause: 280, human: 140 };
+    ? { think: 600, step: 0, pause: 120, human: 0, shot: 0, afterShot: 250 }
+    : { think: 1800, step: 200, pause: 260, human: 120, shot: 380, afterShot: 420 };
 
   const els = {
     board: document.getElementById('board'),
     banner: document.getElementById('turn-banner'),
     defCount: document.getElementById('def-count'),
+    defReserve: document.getElementById('def-reserve'),
     attCount: document.getElementById('att-count'),
     attReserve: document.getElementById('att-reserve'),
     keepHp: document.getElementById('keep-hp'),
@@ -30,12 +31,16 @@
   };
 
   let game;
-  let selected = null; // { q, r } of the selected piece
+  let selected = null; // { q, r } of the selected unit (yours or an enemy, for inspection)
   let message = '';
   let busy = false; // true while the CPU plays or an animation runs
+  let thinking = false;
   let generation = 0; // bumps on New game so a running CPU turn stops
-  let enteringId = null; // piece to play the "enter" animation on
-  let thinking = false; // CPU 'thinking' pause before it acts
+  let enteringIds = new Set(); // units to play the "enter" animation on
+
+  // Persistent SVG layers: `scene` is redrawn on every render, `fx` holds transient effects.
+  let scene;
+  let fx;
 
   const toPixel = ({ q, r }) => ({
     x: HEX_SIZE * SQRT3 * (q + r / 2),
@@ -68,11 +73,14 @@
     selected = null;
     busy = false;
     thinking = false;
-    enteringId = null;
     message = '';
-    sizeBoard();
-    render();
+    setupBoard();
     if (game.turn === CPU) runCpuTurn();
+    else render();
+  }
+
+  function markEntering() {
+    enteringIds = new Set(game.current.entered.map((e) => e.id));
   }
 
   async function runCpuTurn() {
@@ -80,69 +88,96 @@
     const alive = () => gen === generation;
     busy = true;
     selected = null;
-    message = 'The attackers are planning their move…';
+    markEntering();
     thinking = true;
+    message = 'The attackers are planning their move…';
     render();
+    enteringIds = new Set();
     await wait(TIMING.think);
     if (!alive()) return;
     thinking = false;
     message = 'The attackers are moving.';
+    render();
 
     let action;
     while (alive() && (action = AI.nextAction(game))) {
-      if (action.type === 'place') {
-        const res = G.place(game, action.cell.q, action.cell.r);
-        if (!res.ok) break;
-        enteringId = res.piece.id;
-        render();
-        enteringId = null;
-        await wait(TIMING.place + TIMING.pause);
-      } else {
-        await animatedMove(action.from, action.to, TIMING.step);
-        if (!alive()) return;
-        await wait(TIMING.pause);
-      }
+      await animatedMove(action.from, action.to, TIMING.step);
       if (!alive()) return;
-      if (game.winner) break;
+      await wait(TIMING.pause);
     }
     if (!alive()) return;
 
-    if (!game.winner) G.endTurn(game);
+    message = 'The attackers open fire.';
+    await resolveCombat(alive);
+    if (!alive()) return;
+
+    if (!game.winner) {
+      G.endTurn(game);
+      markEntering();
+    }
     busy = false;
     message = game.winner ? describeWinner() : yourTurnMessage();
     render();
+    enteringIds = new Set();
   }
 
-  /** Animate a piece along its path, then apply the move to the game. */
-  async function animatedMove(from, to, stepMs) {
-    const piece = G.pieceAt(game, from.q, from.r);
-    const target = G.movesFor(game, from.q, from.r).find((t) => G.samePos(t, to));
-    if (!piece || !target) return { ok: false, reason: 'That move is not allowed.' };
+  async function endHumanTurn() {
+    if (busy || game.winner || game.turn !== HUMAN) return;
+    const gen = generation;
+    const alive = () => gen === generation;
+    busy = true;
+    selected = null;
+    message = 'Your units open fire.';
+    await resolveCombat(alive);
+    if (!alive()) return;
+    if (game.winner) {
+      busy = false;
+      message = describeWinner();
+      render();
+      return;
+    }
+    G.endTurn(game);
+    runCpuTurn();
+  }
 
+  /** Fire the current player's units one at a time, animating each shot. */
+  async function resolveCombat(alive) {
+    render();
+    for (const unit of G.firingOrder(game)) {
+      if (G.pieceAt(game, unit.q, unit.r) !== unit) continue; // destroyed earlier this volley
+      const target = G.chooseTarget(game, unit);
+      if (!target) {
+        G.fire(game, unit);
+        continue;
+      }
+      await animateShot(unit, target);
+      if (!alive()) return;
+      const event = G.fire(game, unit);
+      render();
+      if (event) showHit(event);
+      await wait(TIMING.afterShot);
+      if (!alive() || game.winner) return;
+    }
+  }
+
+  // ---------- animation ----------
+
+  /** Animate a unit along its path, then apply the move to the game. */
+  async function animatedMove(from, to, stepMs) {
+    const unit = G.pieceAt(game, from.q, from.r);
+    const target = G.movesFor(game, from.q, from.r).find((t) => G.samePos(t, to));
+    if (!unit || !target) return { ok: false, reason: 'That move is not allowed.' };
     if (stepMs > 0) {
-      const node = els.board.querySelector(`[data-id="${piece.id}"]`);
-      const start = toPixel(from);
-      let points = [from, ...target.path].map(toPixel);
-      if (target.kind === 'attack-keep') {
-        // Advance to the striking cell, lunge part-way into the keep, then settle back.
-        const strikeFrom = toPixel(target.end);
-        const keepPx = points[points.length - 1];
-        const lunge = { x: strikeFrom.x + (keepPx.x - strikeFrom.x) * 0.45, y: strikeFrom.y + (keepPx.y - strikeFrom.y) * 0.45 };
-        points = [...points.slice(0, -1), lunge, strikeFrom];
-      }
-      if (target.kind === 'capture') {
-        const victim = els.board.querySelector(`[data-id="${G.pieceAt(game, to.q, to.r).id}"]`);
-        if (victim) victim.classList.add('captured');
-      }
-      if (node) {
-        node.classList.add('moving');
-        await tween(node, start, points, stepMs);
-      }
-      if (target.kind === 'attack-keep') flashKeep();
+      const node = scene.querySelector(`[data-id="${unit.id}"]`);
+      if (node) await tween(node, toPixel(from), [from, ...target.path].map(toPixel), stepMs);
     }
     const res = G.move(game, from, to);
     render();
     return res;
+  }
+
+  function easeInOut(t) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   }
 
   function tween(node, start, points, stepMs) {
@@ -153,8 +188,7 @@
       const t0 = performance.now();
       function frame(now) {
         const t = Math.min(1, (now - t0) / total);
-        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        const f = eased * segments;
+        const f = easeInOut(t) * segments;
         const i = Math.min(segments - 1, Math.floor(f));
         const local = f - i;
         const a = points[i];
@@ -169,25 +203,65 @@
     });
   }
 
-  function flashKeep() {
-    const keep = els.board.querySelector('.keep-piece');
-    if (!keep) return;
-    keep.classList.remove('hit');
-    void keep.getBoundingClientRect();
-    keep.classList.add('hit');
+  function animate(duration, onFrame) {
+    if (duration <= 0) {
+      onFrame(1);
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      function frame(now) {
+        const t = Math.min(1, (now - t0) / duration);
+        onFrame(t);
+        if (t < 1) requestAnimationFrame(frame);
+        else resolve();
+      }
+      requestAnimationFrame(frame);
+    });
   }
 
-  function endHumanTurn() {
-    if (busy || game.winner || game.turn !== HUMAN) return;
-    G.endTurn(game);
-    selected = null;
-    if (game.turn === CPU) runCpuTurn();
-    else render();
+  /** Soldiers lunge at their target; artillery lobs a shell in an arc. */
+  async function animateShot(unit, target) {
+    const a = toPixel(unit);
+    const b = toPixel(target);
+    if (unit.type === 'soldier') {
+      const node = scene.querySelector(`[data-id="${unit.id}"]`);
+      if (!node) return;
+      await animate(TIMING.shot, (t) => {
+        const k = Math.sin(t * Math.PI) * 0.45;
+        node.setAttribute('transform', `translate(${((b.x - a.x) * k).toFixed(2)} ${((b.y - a.y) * k).toFixed(2)})`);
+      });
+      node.removeAttribute('transform');
+      return;
+    }
+    const shell = el('circle', { r: 3.6, class: `shell ${unit.owner}` }, fx);
+    const height = Math.max(18, Math.hypot(b.x - a.x, b.y - a.y) * 0.45);
+    await animate(TIMING.shot * 1.3, (t) => {
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t - Math.sin(t * Math.PI) * height;
+      shell.setAttribute('cx', x.toFixed(2));
+      shell.setAttribute('cy', y.toFixed(2));
+    });
+    shell.remove();
+  }
+
+  /** Flash the target and float the damage number above it. */
+  function showHit(event) {
+    const { x, y } = toPixel(event.to);
+    const burst = el('circle', { cx: x, cy: y, r: HEX_SIZE * 0.5, class: `burst ${event.owner}` }, fx);
+    const label = el('text', { x, y: y - HEX_SIZE * 0.7, class: `damage ${event.killed ? 'killed' : ''}` }, fx);
+    label.textContent = event.killed && event.targetType !== 'keep' ? `−${event.damage} ✕` : `−${event.damage}`;
+    setTimeout(() => {
+      burst.remove();
+      label.remove();
+    }, 1100);
   }
 
   // ---------- rendering ----------
 
-  function sizeBoard() {
+  function setupBoard() {
+    const board = els.board;
+    board.replaceChildren();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const c of game.cells.values()) {
       const { x, y } = toPixel(c);
@@ -195,43 +269,45 @@
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     }
     const pad = HEX_SIZE + 4;
-    els.board.setAttribute(
-      'viewBox',
-      `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`
-    );
-  }
+    board.setAttribute('viewBox', `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`);
 
-  function defineMarkers(board) {
     const defs = el('defs', {}, board);
     for (const kind of ['defender', 'cpu']) {
       const m = el('marker', {
-        id: `arrow-${kind}`,
-        viewBox: '0 0 10 10',
-        refX: '6',
-        refY: '5',
-        markerWidth: '3.2',
-        markerHeight: '3.2',
-        orient: 'auto-start-reverse',
+        id: `arrow-${kind}`, viewBox: '0 0 10 10', refX: '6', refY: '5',
+        markerWidth: '3.2', markerHeight: '3.2', orient: 'auto-start-reverse',
       }, defs);
       el('path', { d: 'M0,0 L10,5 L0,10 Z', class: `arrowhead ${kind}` }, m);
     }
+    scene = el('g', { class: 'scene' }, board);
+    fx = el('g', { class: 'fx' }, board);
+  }
+
+  /** Cells within `type`'s attack radius of `from`. */
+  function rangeCells(type, from) {
+    const set = new Set();
+    for (const c of game.cells.values()) {
+      if (G.inAttackRange(type, G.hexDistance(from, c))) set.add(G.key(c.q, c.r));
+    }
+    return set;
   }
 
   function render() {
-    const board = els.board;
-    board.replaceChildren();
-    defineMarkers(board);
+    scene.replaceChildren();
 
     const myTurn = !busy && !game.winner && game.turn === HUMAN;
-    const moveTargets = new Map();
-    if (selected && myTurn) {
-      for (const m of G.movesFor(game, selected.q, selected.r)) moveTargets.set(G.key(m.q, m.r), m.kind);
+    const selectedUnit = selected && G.pieceAt(game, selected.q, selected.r);
+    const moveTargets = new Set();
+    if (selectedUnit && myTurn && selectedUnit.owner === HUMAN) {
+      for (const m of G.movesFor(game, selected.q, selected.r)) moveTargets.add(G.key(m.q, m.r));
     }
+    const inRange = selectedUnit ? rangeCells(selectedUnit.type, selectedUnit) : new Set();
 
-    const cellsLayer = el('g', { class: 'cells' }, board);
-    const markLayer = el('g', { class: 'marks' }, board);
-    const piecesLayer = el('g', { class: 'pieces' }, board);
-    const arrowLayer = el('g', { class: 'arrows' }, board);
+    const cellsLayer = el('g', { class: 'cells' }, scene);
+    const markLayer = el('g', { class: 'marks' }, scene);
+    const aimLayer = el('g', { class: 'aims' }, scene);
+    const piecesLayer = el('g', { class: 'pieces' }, scene);
+    const arrowLayer = el('g', { class: 'arrows' }, scene);
 
     for (const cell of game.cells.values()) {
       const k = G.key(cell.q, cell.r);
@@ -239,55 +315,115 @@
       const classes = ['cell'];
       if (cell.isEdge) classes.push('edge');
       if (G.hexDistance(cell, game.keep) <= game.config.keepRadius) classes.push('keep-zone');
-      if (moveTargets.has(k)) classes.push(`target ${moveTargets.get(k)}`);
+      if (inRange.has(k)) classes.push(`in-range ${selectedUnit.owner}`);
+      if (moveTargets.has(k)) classes.push('target');
       if (selected && G.samePos(selected, cell)) classes.push('selected');
-
-      const hex = el('polygon', { points: hexPoints(x, y), class: classes.join(' ') }, cellsLayer);
+      const hex = el('polygon', { points: hexPoints(x, y), class: classes.join(' '), 'data-key': k }, cellsLayer);
       hex.addEventListener('click', () => onCellClick(cell));
+      if (moveTargets.has(k)) {
+        hex.addEventListener('mouseenter', () => previewRange(selectedUnit, cell));
+        hex.addEventListener('mouseleave', () => previewRange(selectedUnit, selectedUnit));
+      }
     }
 
     // Keep
     const kp = toPixel(game.keep);
-    const keepGroup = el('g', { class: `keep-piece${moveTargets.has(G.key(0, 0)) ? ' targetable' : ''}` }, piecesLayer);
+    const keepGroup = el('g', { class: 'keep-piece' }, piecesLayer);
     el('polygon', { points: hexPoints(kp.x, kp.y), class: 'keep-hex' }, keepGroup);
     drawCastle(keepGroup, kp.x, kp.y);
-    const hpText = el('text', { x: kp.x, y: kp.y + HEX_SIZE + 12, class: 'keep-hp-label' }, keepGroup);
-    hpText.textContent = `${Math.max(game.keep.hp, 0)} HP`;
+    drawHpBar(keepGroup, kp.x, kp.y + HEX_SIZE * 0.62, game.keep.hp, game.keep.maxHp, 'keep', 30);
     keepGroup.addEventListener('click', () => onCellClick(game.keep));
 
-    // Pieces
-    for (const piece of game.pieces.values()) {
-      const { x, y } = toPixel(piece);
-      const classes = ['piece', piece.owner];
-      if (selected && G.samePos(selected, piece)) classes.push('selected');
-      if (piece.owner === game.turn && piece.moved && !game.winner) classes.push('done');
-      if (piece.id === enteringId) classes.push('entering');
-      const g = el('g', { class: classes.join(' '), 'data-id': piece.id }, piecesLayer);
+    // Units
+    for (const unit of game.pieces.values()) {
+      const { x, y } = toPixel(unit);
+      const classes = ['piece', unit.owner, unit.type];
+      if (selected && G.samePos(selected, unit)) classes.push('selected');
+      if (unit.owner === game.turn && unit.moved && !game.winner && !busy) classes.push('done');
+      if (enteringIds.has(unit.id)) classes.push('entering');
+      const g = el('g', { class: classes.join(' '), 'data-id': unit.id }, piecesLayer);
       const inner = el('g', { class: 'piece-inner', style: `transform-origin: ${x}px ${y}px` }, g);
-      if (piece.owner === G.DEFENDER) {
-        el('circle', { cx: x, cy: y, r: HEX_SIZE * 0.58, class: 'body' }, inner);
-        el('path', { d: shieldPath(x, y), class: 'glyph' }, inner);
-      } else {
-        el('polygon', { points: trianglePoints(x, y), class: 'body' }, inner);
-        el('path', { d: swordPath(x, y), class: 'glyph' }, inner);
-      }
-      g.addEventListener('click', () => onCellClick(piece));
+      drawUnit(inner, unit, x, y);
+      drawHpBar(g, x, y + HEX_SIZE * 0.66, unit.hp, unit.maxHp, unit.owner, 24);
+      g.addEventListener('click', () => onCellClick(unit));
     }
 
-    // Arrows and entry markers.
-    // During the human's turn: their own moves so far, plus the CPU's last turn in grey.
-    // During the CPU's turn: the CPU's moves as they happen, in grey.
+    // Aim lines: who your units will fire at when you end the turn.
+    if (myTurn) {
+      for (const unit of G.piecesOf(game, HUMAN)) {
+        const target = G.chooseTarget(game, unit);
+        if (!target) continue;
+        const a = toPixel(unit);
+        const b = toPixel(target);
+        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: 'aim' }, aimLayer);
+        drawCrosshair(aimLayer, b.x, b.y);
+      }
+    }
+
+    // Arrows and entry markers. During your turn: your moves so far plus the
+    // CPU's last turn in grey. During the CPU's turn: its moves as they happen.
     const records = [];
     if (game.current) records.push(game.current);
     if (game.turn === HUMAN && game.lastTurn && game.lastTurn.player === CPU) records.push(game.lastTurn);
     for (const rec of records) {
       const style = rec.player === CPU ? 'cpu' : 'defender';
-      for (const cell of rec.placed) drawRing(markLayer, cell, `entry ${style}`);
-      for (const cell of rec.spawned) drawRing(markLayer, cell, `entry ${style}`);
+      for (const cell of rec.entered) drawRing(markLayer, cell, `entry ${style}`);
       for (const mv of rec.moves) drawArrow(arrowLayer, mv, style);
     }
 
     renderPanel();
+  }
+
+  /** While hovering a move target, show the attack radius from there. */
+  function previewRange(unit, from) {
+    if (!unit) return;
+    const set = rangeCells(unit.type, from);
+    for (const node of scene.querySelectorAll('.cells .cell')) {
+      node.classList.toggle('in-range', set.has(node.getAttribute('data-key')));
+      node.classList.toggle(unit.owner, set.has(node.getAttribute('data-key')));
+    }
+  }
+
+  function drawUnit(group, unit, x, y) {
+    const s = HEX_SIZE;
+    if (unit.owner === G.DEFENDER) {
+      el('circle', { cx: x, cy: y, r: s * 0.56, class: 'body' }, group);
+    } else {
+      el('polygon', {
+        points: `${x},${y - s * 0.66} ${x + s * 0.62},${y + s * 0.44} ${x - s * 0.62},${y + s * 0.44}`,
+        class: 'body',
+      }, group);
+    }
+    const gy = unit.owner === G.ATTACKER ? y + s * 0.06 : y;
+    if (unit.type === 'soldier') {
+      // Sword
+      const k = s * 0.3;
+      el('path', {
+        d: `M${x},${gy - k * 1.15} L${x},${gy + k} M${x - k * 0.6},${gy + k * 0.35} L${x + k * 0.6},${gy + k * 0.35}`,
+        class: 'glyph',
+      }, group);
+    } else {
+      // Artillery: crosshair
+      const k = s * 0.24;
+      el('circle', { cx: x, cy: gy, r: k, class: 'glyph' }, group);
+      el('path', {
+        d: `M${x - k * 1.6},${gy} L${x - k * 0.5},${gy} M${x + k * 0.5},${gy} L${x + k * 1.6},${gy} M${x},${gy - k * 1.6} L${x},${gy - k * 0.5} M${x},${gy + k * 0.5} L${x},${gy + k * 1.6}`,
+        class: 'glyph',
+      }, group);
+    }
+  }
+
+  function drawHpBar(group, x, y, hp, maxHp, owner, width) {
+    const h = 3.6;
+    el('rect', { x: x - width / 2, y, width, height: h, rx: 1.5, class: 'hp-track' }, group);
+    const ratio = Math.max(0, hp / maxHp);
+    const level = ratio > 0.6 ? 'high' : ratio > 0.3 ? 'mid' : 'low';
+    el('rect', { x: x - width / 2, y, width: width * ratio, height: h, rx: 1.5, class: `hp-fill ${owner} ${level}` }, group);
+  }
+
+  function drawCrosshair(layer, x, y) {
+    const r = HEX_SIZE * 0.78;
+    el('circle', { cx: x, cy: y, r, class: 'crosshair' }, layer);
   }
 
   function drawRing(layer, cell, cls) {
@@ -297,7 +433,6 @@
 
   function drawArrow(layer, mv, style) {
     const pts = [mv.from, ...mv.path].map(toPixel);
-    // Trim both ends so the arrow sits between piece glyphs rather than on them.
     const trim = (a, b, amount) => {
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
@@ -305,44 +440,27 @@
     };
     pts[0] = trim(pts[0], pts[1], HEX_SIZE * 0.55);
     const n = pts.length - 1;
-    pts[n] = trim(pts[n], pts[n - 1], HEX_SIZE * (mv.kind === 'move' ? 0.35 : 0.7));
+    pts[n] = trim(pts[n], pts[n - 1], HEX_SIZE * 0.4);
     el('polyline', {
       points: pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '),
-      class: `arrow ${style} ${mv.kind}`,
+      class: `arrow ${style}`,
       'marker-end': `url(#arrow-${style})`,
     }, layer);
   }
 
-  function trianglePoints(x, y) {
-    const s = HEX_SIZE * 0.68;
-    return `${x},${y - s} ${x + s * 0.9},${y + s * 0.62} ${x - s * 0.9},${y + s * 0.62}`;
-  }
-
-  function shieldPath(x, y) {
-    const s = HEX_SIZE * 0.3;
-    return `M${x - s},${y - s} L${x + s},${y - s} L${x + s},${y} Q${x + s},${y + s} ${x},${y + s * 1.3} Q${x - s},${y + s} ${x - s},${y} Z`;
-  }
-
-  function swordPath(x, y) {
-    const s = HEX_SIZE * 0.32;
-    return `M${x},${y - s * 1.2} L${x},${y + s} M${x - s * 0.6},${y + s * 0.35} L${x + s * 0.6},${y + s * 0.35}`;
-  }
-
   function drawCastle(group, x, y) {
     const w = HEX_SIZE * 1.0;
-    const h = HEX_SIZE * 0.8;
+    const h = HEX_SIZE * 0.72;
     const left = x - w / 2;
-    const top = y - h / 2;
+    const top = y - h / 2 - 2;
     const m = w / 5; // merlon width
     const d = [
-      `M${left},${top + h}`,
-      `L${left},${top}`,
+      `M${left},${top + h}`, `L${left},${top}`,
       `L${left + m},${top}`, `L${left + m},${top + m}`,
       `L${left + 2 * m},${top + m}`, `L${left + 2 * m},${top}`,
       `L${left + 3 * m},${top}`, `L${left + 3 * m},${top + m}`,
       `L${left + 4 * m},${top + m}`, `L${left + 4 * m},${top}`,
-      `L${left + w},${top}`,
-      `L${left + w},${top + h}`,
+      `L${left + w},${top}`, `L${left + w},${top + h}`,
       `L${x + m * 0.6},${top + h}`, `L${x + m * 0.6},${top + h - m * 1.5}`,
       `Q${x},${top + h - m * 2.3} ${x - m * 0.6},${top + h - m * 1.5}`,
       `L${x - m * 0.6},${top + h}`, 'Z',
@@ -362,27 +480,36 @@
       els.banner.textContent = `Turn ${game.turnNumber}: Your move`;
     }
     els.defCount.textContent = G.piecesOf(game, G.DEFENDER).length;
+    els.defReserve.textContent = game.pools[G.DEFENDER].length;
     els.attCount.textContent = G.piecesOf(game, G.ATTACKER).length;
-    els.attReserve.textContent = game.reserves[G.ATTACKER];
-    els.keepHp.textContent = `${Math.max(game.keep.hp, 0)} / ${game.config.keepHp}`;
+    els.attReserve.textContent = game.pools[G.ATTACKER].length;
+    els.keepHp.textContent = `${game.keep.hp} / ${game.keep.maxHp}`;
     els.message.textContent = message;
     els.endBtn.disabled = busy || !!game.winner || game.turn !== HUMAN;
 
     els.log.replaceChildren();
-    for (const entry of [...game.log].reverse()) {
+    for (const entry of [...game.log].reverse().slice(0, 120)) {
       const li = document.createElement('li');
       li.className = entry.player;
-      const who = entry.player === CPU ? 'Attackers' : 'Defenders';
+      const who = entry.player === CPU ? 'Attacker' : 'Defender';
       li.textContent = `T${entry.turn} ${who} ${entry.message}`;
       els.log.appendChild(li);
     }
   }
 
+  function describeUnit(unit) {
+    const s = G.UNITS[unit.type];
+    const whose = unit.owner === HUMAN ? 'Your' : 'Enemy';
+    const range = s.minRange === s.maxRange ? `${s.maxRange} cell` : `${s.minRange}–${s.maxRange} cells`;
+    return `${whose} ${s.name.toLowerCase()}: ${unit.hp}/${unit.maxHp} HP, moves ${s.move}, ` +
+      `attack ${s.attack}, defence ${s.defence}, hits targets ${range} away.`;
+  }
+
   function yourTurnMessage() {
     const left = G.unmovedPieces(game).length;
-    if (left === 0) return 'All your pieces have moved. Press End turn.';
-    const plural = left === 1 ? 'piece' : 'pieces';
-    return `${left} ${plural} still to move. Click one of your pieces to see where it can go, or press End turn.`;
+    if (left === 0) return 'All your units have moved. Press End turn to fire.';
+    const plural = left === 1 ? 'unit' : 'units';
+    return `${left} ${plural} still to move. Click a unit to see its moves and range. Your units fire when you end the turn.`;
   }
 
   function describeWinner() {
@@ -394,44 +521,54 @@
   // ---------- input ----------
 
   async function onCellClick({ q, r }) {
-    if (busy || game.winner || game.turn !== HUMAN) return;
-    const piece = G.pieceAt(game, q, r);
+    if (busy || game.winner) return;
+    const unit = G.pieceAt(game, q, r);
+    const selectedUnit = selected && G.pieceAt(game, selected.q, selected.r);
 
-    if (piece && piece.owner === HUMAN) {
-      if (piece.moved) {
-        message = 'That piece has already moved this turn.';
-      } else if (selected && G.samePos(selected, piece)) {
-        selected = null;
-        message = yourTurnMessage();
-      } else {
-        selected = { q, r };
-        message = `Choose a highlighted cell (up to ${game.config.maxMove} away), or click the piece again to cancel.`;
-      }
-      render();
-      return;
-    }
-
-    if (selected) {
+    // Move the selected unit if this is one of its destinations.
+    if (selectedUnit && selectedUnit.owner === HUMAN && game.turn === HUMAN && !unit) {
       const legal = G.movesFor(game, selected.q, selected.r).some((t) => G.samePos(t, { q, r }));
-      if (!legal) {
-        message = `That piece can't reach there. Pieces move up to ${game.config.maxMove} cells through empty spaces.`;
+      if (legal) {
+        const from = selected;
+        selected = null;
+        busy = true;
+        render();
+        const res = await animatedMove(from, { q, r }, TIMING.human);
+        busy = false;
+        message = res.ok ? yourTurnMessage() : res.reason;
         render();
         return;
       }
-      const from = selected;
-      selected = null;
-      busy = true;
-      render();
-      const res = await animatedMove(from, { q, r }, TIMING.human);
-      busy = false;
-      message = game.winner ? describeWinner() : res.ok ? yourTurnMessage() : res.reason;
+    }
+
+    if (unit) {
+      if (selected && G.samePos(selected, unit)) {
+        selected = null;
+        message = game.turn === HUMAN ? yourTurnMessage() : message;
+      } else {
+        selected = { q, r };
+        message = describeUnit(unit);
+        if (unit.owner === HUMAN && unit.moved) message += ' It has already moved this turn.';
+      }
       render();
       return;
     }
 
-    message = piece
-      ? 'Select one of your pieces within reach of that attacker to capture it.'
-      : 'Select one of your pieces first. New defenders appear by the keep at the start of each turn.';
+    if (G.isKeep(game, q, r)) {
+      selected = null;
+      message = `The keep: ${game.keep.hp}/${game.keep.maxHp} HP, defence ${game.config.keepDefence}.`;
+      render();
+      return;
+    }
+
+    if (selectedUnit && selectedUnit.owner === HUMAN) {
+      message = selectedUnit.moved
+        ? 'That unit has already moved this turn.'
+        : `That's out of reach. ${G.UNITS[selectedUnit.type].name} moves up to ${G.UNITS[selectedUnit.type].move} cells through empty spaces.`;
+    } else {
+      selected = null;
+      message = yourTurnMessage();
+    }
     render();
   }
 
@@ -439,9 +576,9 @@
   els.newBtn.addEventListener('click', newGame);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && selected) {
+    if (e.key === 'Escape' && selected && !busy) {
       selected = null;
-      message = yourTurnMessage();
+      message = game.turn === HUMAN ? yourTurnMessage() : '';
       render();
     }
   });

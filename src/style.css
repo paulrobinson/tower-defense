@@ -15,6 +15,10 @@
   --keep: #7a6a4f;
   --select: #f2b705;
   --cpu-arrow: #6f6a62;
+  --hp-track: rgba(0, 0, 0, 0.18);
+  --hp-high: #3f9b52;
+  --hp-mid: #d49a1a;
+  --hp-low: #d0402f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +38,10 @@
     --attacker-soft: rgba(232, 96, 79, 0.35);
     --keep: #b39d74;
     --cpu-arrow: #b4ada2;
+    --hp-track: rgba(255, 255, 255, 0.18);
+    --hp-high: #5cc06f;
+    --hp-mid: #e8b23a;
+    --hp-low: #f0604f;
   }
 }
 
@@ -101,39 +109,59 @@ main {
 .cell.placeable.attacker { fill: var(--attacker-soft); }
 .cell.placeable:hover { stroke: var(--text); stroke-width: 2; }
 
-.cell.target { stroke: var(--select); stroke-width: 2.5; fill: rgba(242, 183, 5, 0.25); }
-.cell.target.capture,
-.cell.target.attack-keep { fill: rgba(242, 183, 5, 0.55); }
+.cell.in-range.defender { fill: var(--defender-soft); }
+.cell.in-range.attacker { fill: var(--attacker-soft); }
+.cell.target { stroke: var(--select); stroke-width: 2.5; fill: rgba(242, 183, 5, 0.3); }
+.cell.target.in-range { fill: rgba(242, 183, 5, 0.45); }
 .cell.selected { stroke: var(--select); stroke-width: 3; }
 
 .keep-piece { cursor: pointer; }
 .keep-hex { fill: var(--keep); stroke: var(--cell-stroke); }
 .castle { fill: var(--bg); stroke: none; }
-.keep-hp-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-anchor: middle;
-  fill: var(--text);
-  pointer-events: none;
-  paint-order: stroke;
-  stroke: var(--bg);
-  stroke-width: 3px;
-}
 
 .piece { cursor: pointer; }
-.piece circle, .piece .body { stroke: rgba(0, 0, 0, 0.35); stroke-width: 1.5; }
-.piece.defender circle { fill: var(--defender); }
+.piece .body { stroke: rgba(0, 0, 0, 0.35); stroke-width: 1.5; }
 .piece.attacker .body { fill: var(--attacker); }
 .piece .glyph { fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.piece.defender .glyph { fill: rgba(255, 255, 255, 0.25); }
-.piece.selected circle, .piece.selected .body { stroke: var(--select); stroke-width: 3; }
+.piece.defender .body { fill: var(--defender); }
+
+.hp-track { fill: var(--hp-track); }
+.hp-fill.high { fill: var(--hp-high); }
+.hp-fill.mid { fill: var(--hp-mid); }
+.hp-fill.low { fill: var(--hp-low); }
+.hp-fill.keep.high { fill: var(--hp-high); }
+
+.aims { pointer-events: none; }
+.aim { stroke: var(--defender); stroke-width: 1.6; stroke-dasharray: 2 4; stroke-linecap: round; opacity: 0.8; }
+.crosshair { fill: none; stroke: var(--defender); stroke-width: 1.6; stroke-dasharray: 3 3; }
+
+.fx { pointer-events: none; }
+.shell { stroke: var(--bg); stroke-width: 1.2; }
+.shell.defender { fill: var(--defender); }
+.shell.attacker { fill: var(--attacker); }
+.burst { fill: none; stroke-width: 3; animation: burst 0.6s ease-out forwards; }
+.burst.defender { stroke: var(--defender); }
+.burst.attacker { stroke: var(--attacker); }
+@keyframes burst { from { opacity: 1; transform: scale(0.5); } to { opacity: 0; transform: scale(1.5); } }
+.burst { transform-box: fill-box; transform-origin: center; }
+.damage {
+  font-size: 13px;
+  font-weight: 800;
+  text-anchor: middle;
+  fill: var(--text);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3.5px;
+  animation: float-up 1.1s ease-out forwards;
+}
+.damage.killed { fill: var(--attacker); }
+@keyframes float-up { from { opacity: 1; transform: translateY(0); } 70% { opacity: 1; } to { opacity: 0; transform: translateY(-14px); } }
+.piece.selected .body { stroke: var(--select); stroke-width: 3; }
 .piece.done { opacity: 0.55; }
 .piece.done .piece-inner { filter: saturate(0.6); }
-.piece.captured { opacity: 0; transition: opacity 0.35s ease-in; }
 .piece.entering .piece-inner { animation: enter 0.45s cubic-bezier(.2,1.4,.4,1) both; }
 @keyframes enter { from { transform: scale(0.1); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
-.keep-piece.targetable .keep-hex { stroke: var(--select); stroke-width: 3; }
 .keep-piece.hit .keep-hex { animation: keep-hit 0.5s ease-out; }
 @keyframes keep-hit { 0% { fill: var(--attacker); } 100% { fill: var(--keep); } }
 
@@ -170,12 +198,13 @@ main {
 @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
+  .burst, .damage,
   .piece.entering .piece-inner, .keep-piece.hit .keep-hex, .turn-banner.thinking .dots span { animation: none; }
 }
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   margin: 12px 0;
 }
@@ -186,7 +215,8 @@ main {
   text-align: center;
 }
 .stat .label { display: block; font-size: 0.72rem; color: var(--muted); }
-.stat .value { font-size: 1.3rem; font-weight: 700; }
+.stat .value { display: block; font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat .sub { font-size: 0.72rem; color: var(--muted); }
 .stat.defender .value { color: var(--defender); }
 .stat.attacker .value { color: var(--attacker); }
 .stat.keep .value { color: var(--keep); }
@@ -222,6 +252,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .swatch.defender { background: var(--defender); }
 .swatch.attacker { background: var(--attacker); }
+
+.units { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.units th, .units td { padding: 4px 6px; text-align: center; border-bottom: 1px solid var(--border); }
+.units thead th { font-weight: 600; color: var(--muted); font-size: 0.72rem; }
+.units tbody th { text-align: left; }
 
 h2 { font-size: 1rem; margin: 16px 0 4px; }
 .log {
