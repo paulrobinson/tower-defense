@@ -24,7 +24,7 @@
           <div class="stat defender">
             <span class="label">Your units</span>
             <span id="def-count" class="value"></span>
-            <span class="sub">+<span id="def-reserve"></span> to come</span>
+            <span id="def-next" class="sub"></span>
           </div>
           <div class="stat attacker">
             <span class="label">Attackers</span>
@@ -45,6 +45,19 @@
           <button id="new-btn" type="button">New game</button>
         </div>
 
+        <section class="build" aria-labelledby="build-title">
+          <div class="build-head">
+            <h2 id="build-title">Build queue</h2>
+            <label class="repeat"><input id="repeat-build" type="checkbox" /> Repeat</label>
+          </div>
+          <div class="build-add">
+            <button id="build-soldier" type="button">+ Soldier <span class="cost">1 turn</span></button>
+            <button id="build-artillery" type="button">+ Artillery <span class="cost">3 turns</span></button>
+          </div>
+          <ol id="build-queue" class="queue"></ol>
+          <p id="build-empty" class="queue-empty" hidden>Nothing is being built. Add a unit to the queue.</p>
+        </section>
+
         <table class="units">
           <thead>
             <tr><th scope="col">Unit</th><th scope="col">Move</th><th scope="col">Attack</th><th scope="col">Defence</th><th scope="col">Range</th><th scope="col">HP</th></tr>
@@ -60,7 +73,9 @@
           <summary>How to play</summary>
           <ul>
             <li>You are the <span class="swatch defender"></span> defenders (circles). The CPU plays the <span class="swatch attacker"></span> attackers (triangles) and goes first.</li>
-            <li>Each side has 12 units: 3 artillery (crosshair) and 9 soldiers (sword). One enters at random each turn: yours near the keep, theirs on the edge.</li>
+            <li>Units are soldiers (sword) or artillery (crosshair).</li>
+            <li>You build as many units as you like from the <strong>build queue</strong>. A soldier takes 1 turn and artillery 3. Only the unit at the front is being built. When it's done it appears at the start of your turn on a random cell near the keep. Turn on <strong>Repeat</strong> to put each finished unit back at the end of the queue.</li>
+            <li>The attackers have 12 units: 3 artillery and 9 soldiers. One enters at random on the edge each turn.</li>
             <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range. Artillery that moved this turn holds its fire.</li>
             <li>Changed your mind? <strong>Undo</strong> takes back the latest move (Ctrl/⌘+Z), or the selected unit's move, any time before you end the turn.</li>
             <li>Damage is random, averaging 3 × attack ÷ defence. A unit at 0 HP is destroyed.</li>

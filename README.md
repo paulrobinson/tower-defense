@@ -16,19 +16,25 @@ You play the defenders. The CPU plays the attackers.
 
 - The board is a roughly circular hex grid, 17 cells across at its widest.
 - The defender's **keep** sits in the centre (40 HP, defence 4).
-- Each side has 12 units: 3 artillery and 9 soldiers.
+- Units are soldiers or artillery. The attackers have 12: 3 artillery and 9 soldiers.
+  The defender builds as many as they like from a build queue.
 
-| Unit      | Move | Attack | Defence | Attack radius | HP |
-|-----------|------|--------|---------|---------------|----|
-| Soldier   | 2    | 2      | 2       | 1             | 10 |
-| Artillery | 3    | 5      | 1       | 2–4           | 10 |
+| Unit      | Move | Attack | Defence | Attack radius | HP | Build time |
+|-----------|------|--------|---------|---------------|----|------------|
+| Soldier   | 2    | 2      | 2       | 1             | 10 | 1 turn     |
+| Artillery | 3    | 5      | 1       | 2–4           | 10 | 3 turns    |
 
 Artillery can't fire on a turn it moves.
 
 Each turn:
 
-1. One unit, picked at random from the player's remaining units, enters the board:
-   attackers on a random empty edge cell, defenders on a random empty cell within 3 of the keep.
+1. New units enter on a random empty cell.
+   - **Attackers:** one unit, picked at random from their remaining 12, enters on the edge.
+   - **Defenders:** the unit at the front of the build queue gains a turn of progress. Once it has
+     had its build time, it enters within 3 of the keep. You can add units to the queue, reorder
+     them or remove them at any time. Removing an item loses its progress. With **Repeat** on,
+     each finished unit goes back on the end of the queue. The queue starts with one soldier.
+     If there's no room near the keep, a finished unit waits at the front of the queue.
 2. The player moves any or all of their units once each, through empty cells.
    Units can't move onto other units or the keep.
    Any move can be undone until the turn ends (Undo button, or Ctrl/⌘+Z for the latest move),

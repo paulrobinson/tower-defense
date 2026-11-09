@@ -47,13 +47,11 @@ test('keep sits at the centre', () => {
   assert.ok(G.isKeep(game, 0, 0));
 });
 
-test('each side has 3 artillery and 9 soldiers', () => {
+test('the attackers have 3 artillery and 9 soldiers', () => {
   const game = G.createGame({ rng: seeded(2) });
   const all = [...game.pools.attacker, ...G.piecesOf(game, G.ATTACKER).map((u) => u.type)];
   assert.equal(all.length, 12);
   assert.equal(all.filter((t) => t === 'artillery').length, 3);
-  assert.equal(game.pools.defender.filter((t) => t === 'artillery').length, 3);
-  assert.equal(game.pools.defender.length, 12);
 });
 
 test('units enter at random: attackers on the edge, defenders near the keep', () => {
@@ -284,4 +282,80 @@ test('moves cannot be undone after the turn ends', () => {
   G.endTurn(game);
   G.endTurn(game);
   assert.equal(G.undoMove(game, s.id).ok, false);
+});
+
+// ---------- build queue ----------
+
+/** Advance to the start of the defender's next turn. */
+function nextDefenderTurn(game) {
+  G.endTurn(game);
+  if (game.turn !== G.DEFENDER) G.endTurn(game);
+}
+
+test('the defender starts with a soldier queued, which arrives on their first turn', () => {
+  const game = G.createGame({ rng: seeded(3) });
+  assert.deepEqual(game.buildQueue.map((i) => i.type), ['soldier']);
+  G.endTurn(game);
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, 1);
+  assert.equal(game.buildQueue.length, 0);
+});
+
+test('soldiers take 1 turn to build and artillery 3', () => {
+  const game = G.createGame({ rng: seeded(4), initialBuildQueue: [] });
+  G.endTurn(game); // defender turn 2: nothing queued
+  G.queueUnit(game, 'artillery');
+  G.queueUnit(game, 'soldier');
+  assert.deepEqual(G.buildSchedule(game).map((s) => s.turnsLeft), [3, 4]);
+
+  const arrivals = [];
+  for (let t = 0; t < 4; t++) {
+    nextDefenderTurn(game);
+    arrivals.push(G.piecesOf(game, G.DEFENDER).map((u) => u.type).sort().join('+'));
+  }
+  assert.deepEqual(arrivals, ['', '', 'artillery', 'artillery+soldier']);
+});
+
+test('only the front of the queue is built', () => {
+  const game = G.createGame({ rng: seeded(5), initialBuildQueue: ['artillery', 'soldier'] });
+  G.endTurn(game);
+  assert.equal(game.buildQueue[0].progress, 1);
+  assert.equal(game.buildQueue[1].progress, 0);
+});
+
+test('building is unlimited', () => {
+  const game = G.createGame({ rng: seeded(6), initialBuildQueue: [] });
+  for (let i = 0; i < 20; i++) G.queueUnit(game, 'soldier');
+  for (let t = 0; t < 20; t++) nextDefenderTurn(game);
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, 20);
+});
+
+test('repeat puts each finished unit back at the end of the queue', () => {
+  const game = G.createGame({ rng: seeded(7), initialBuildQueue: ['soldier', 'artillery'] });
+  G.setRepeatBuild(game, true);
+  G.endTurn(game); // soldier done
+  assert.deepEqual(game.buildQueue.map((i) => i.type), ['artillery', 'soldier']);
+  assert.equal(game.buildQueue[1].progress, 0);
+});
+
+test('queued items can be removed and reordered', () => {
+  const game = G.createGame({ rng: seeded(8), initialBuildQueue: [] });
+  const a = G.queueUnit(game, 'soldier').item;
+  const b = G.queueUnit(game, 'artillery').item;
+  assert.ok(G.moveInQueue(game, b.id, -1).ok);
+  assert.deepEqual(game.buildQueue.map((i) => i.type), ['artillery', 'soldier']);
+  assert.equal(G.moveInQueue(game, b.id, -1).ok, false, 'already at the front');
+  assert.ok(G.removeFromQueue(game, a.id).ok);
+  assert.deepEqual(game.buildQueue.map((i) => i.id), [b.id]);
+});
+
+test('a finished unit waits at the front if there is no room near the keep', () => {
+  const game = G.createGame({ rng: seeded(9), initialBuildQueue: [] });
+  for (const c of G.entryCells(game, G.DEFENDER)) put(game, G.DEFENDER, 'soldier', c.q, c.r);
+  const before = G.piecesOf(game, G.DEFENDER).length;
+  G.queueUnit(game, 'soldier');
+  G.endTurn(game);
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, before);
+  assert.equal(game.buildQueue.length, 1);
+  assert.equal(game.buildQueue[0].progress, 1);
+  assert.equal(G.buildSchedule(game)[0].turnsLeft, 1);
 });

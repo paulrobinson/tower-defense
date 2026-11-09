@@ -256,6 +256,35 @@ button:disabled { opacity: 0.5; cursor: default; }
 .swatch.defender { background: var(--defender); }
 .swatch.attacker { background: var(--attacker); }
 
+.stat .sub.warn { color: var(--attacker); font-weight: 600; }
+
+.build { margin-top: 16px; }
+.build-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.build-head h2 { margin: 0; }
+.repeat { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; }
+.build-add { display: flex; gap: 8px; margin: 8px 0; }
+.build-add button { flex: 1 1 0; }
+.build-add .cost { display: block; font-size: 0.72rem; color: var(--muted); }
+.queue { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+.queue-item {
+  display: grid;
+  grid-template-columns: 4.6rem 1fr 4.2rem auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.queue-item.building { border-color: var(--defender); }
+.queue-name { font-weight: 600; }
+.queue-bar { height: 6px; border-radius: 3px; background: var(--hp-track); overflow: hidden; }
+.queue-bar span { display: block; height: 100%; background: var(--defender); }
+.queue-eta { font-size: 0.78rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.queue-controls { display: flex; gap: 2px; }
+.queue-controls button { flex: none; padding: 2px 6px; font-size: 0.78rem; line-height: 1.2; }
+.queue-empty { margin: 4px 0 0; font-size: 0.85rem; color: var(--attacker); }
+
 .units { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .units th, .units td { padding: 4px 6px; text-align: center; border-bottom: 1px solid var(--border); }
 .units thead th { font-weight: 600; color: var(--muted); font-size: 0.72rem; }

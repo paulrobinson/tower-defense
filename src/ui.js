@@ -20,7 +20,12 @@
     board: document.getElementById('board'),
     banner: document.getElementById('turn-banner'),
     defCount: document.getElementById('def-count'),
-    defReserve: document.getElementById('def-reserve'),
+    defNext: document.getElementById('def-next'),
+    buildSoldier: document.getElementById('build-soldier'),
+    buildArtillery: document.getElementById('build-artillery'),
+    repeatBuild: document.getElementById('repeat-build'),
+    buildQueue: document.getElementById('build-queue'),
+    buildEmpty: document.getElementById('build-empty'),
     attCount: document.getElementById('att-count'),
     attReserve: document.getElementById('att-reserve'),
     keepHp: document.getElementById('keep-hp'),
@@ -482,7 +487,7 @@
       els.banner.textContent = `Turn ${game.turnNumber}: Your move`;
     }
     els.defCount.textContent = G.piecesOf(game, G.DEFENDER).length;
-    els.defReserve.textContent = game.pools[G.DEFENDER].length;
+    renderBuildQueue();
     els.attCount.textContent = G.piecesOf(game, G.ATTACKER).length;
     els.attReserve.textContent = game.pools[G.ATTACKER].length;
     els.keepHp.textContent = `${game.keep.hp} / ${game.keep.maxHp}`;
@@ -501,6 +506,69 @@
       li.textContent = `T${entry.turn} ${who} ${entry.message}`;
       els.log.appendChild(li);
     }
+  }
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  function renderBuildQueue() {
+    const schedule = G.buildSchedule(game);
+    const canEdit = !game.winner;
+    els.buildSoldier.disabled = !canEdit;
+    els.buildArtillery.disabled = !canEdit;
+    els.repeatBuild.checked = game.repeatBuild;
+    els.repeatBuild.disabled = !canEdit;
+    els.buildEmpty.hidden = schedule.length > 0 || !!game.winner;
+    els.defNext.textContent = schedule.length
+      ? `next in ${plural(schedule[0].turnsLeft, 'turn')}`
+      : 'queue empty';
+    els.defNext.classList.toggle('warn', !schedule.length);
+
+    els.buildQueue.replaceChildren();
+    schedule.forEach(({ item, turnsLeft }, i) => {
+      const s = G.UNITS[item.type];
+      const li = document.createElement('li');
+      li.className = `queue-item ${item.type}${i === 0 ? ' building' : ''}`;
+
+      const name = document.createElement('span');
+      name.className = 'queue-name';
+      name.textContent = s.name;
+
+      const bar = document.createElement('span');
+      bar.className = 'queue-bar';
+      const fill = document.createElement('span');
+      fill.style.width = `${(item.progress / s.buildTurns) * 100}%`;
+      bar.appendChild(fill);
+      bar.title = `${item.progress} of ${plural(s.buildTurns, 'turn')} done`;
+
+      const eta = document.createElement('span');
+      eta.className = 'queue-eta';
+      eta.textContent = item.progress >= s.buildTurns ? 'ready' : `in ${plural(turnsLeft, 'turn')}`;
+
+      const controls = document.createElement('span');
+      controls.className = 'queue-controls';
+      const mk = (label, text, onClick, disabled) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = text;
+        b.setAttribute('aria-label', `${label} ${s.name.toLowerCase()} (position ${i + 1})`);
+        b.disabled = disabled || !canEdit;
+        b.addEventListener('click', onClick);
+        controls.appendChild(b);
+      };
+      mk('Move up', '↑', () => editQueue(() => G.moveInQueue(game, item.id, -1)), i === 0);
+      mk('Move down', '↓', () => editQueue(() => G.moveInQueue(game, item.id, 1)), i === schedule.length - 1);
+      mk('Remove', '✕', () => editQueue(() => G.removeFromQueue(game, item.id), item), false);
+
+      li.append(name, bar, eta, controls);
+      els.buildQueue.appendChild(li);
+    });
+  }
+
+  function editQueue(change, removed) {
+    const res = change();
+    if (res && res.ok === false) message = res.reason;
+    else if (removed && removed.progress > 0) message = `Removed ${G.UNITS[removed.type].name.toLowerCase()}; its build progress is lost.`;
+    renderPanel();
   }
 
   function describeUnit(unit) {
@@ -620,6 +688,9 @@
   }
 
   els.endBtn.addEventListener('click', endHumanTurn);
+  els.buildSoldier.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'soldier')));
+  els.buildArtillery.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'artillery')));
+  els.repeatBuild.addEventListener('change', () => editQueue(() => G.setRepeatBuild(game, els.repeatBuild.checked)));
   els.undoBtn.addEventListener('click', undo);
   els.newBtn.addEventListener('click', newGame);
 

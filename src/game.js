@@ -7,9 +7,15 @@
  * Coordinates are axial hex coordinates (q, r) with pointy-top hexes.
  *
  * Turn structure:
- *   1. At the start of a turn, one new unit enters for the player whose turn
- *      it is (random type from their remaining pool): attackers on a random
- *      empty edge cell, defenders on a random empty cell near the keep.
+ *   1. At the start of a turn, new units enter for the player whose turn it is,
+ *      on a random empty cell: attackers on the edge, defenders near the keep.
+ *        Attackers: one unit per turn, drawn at random from a fixed pool of
+ *          12 (3 artillery, 9 soldiers).
+ *        Defenders: build units from a queue, without limit. The unit at the
+ *          front of the queue gains one turn of progress at the start of each
+ *          defender turn, and enters once it has had its build time
+ *          (soldier 1 turn, artillery 3). With "repeat" on, each finished
+ *          unit is put back at the end of the queue.
  *   2. The player may move every one of their units once, up to the unit's
  *      move distance, through empty cells.
  *      Moves can be undone until the turn ends.
@@ -32,8 +38,8 @@
   const ATTACKER = 'attacker';
 
   const UNITS = {
-    soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10, firesAfterMoving: true },
-    artillery: { name: 'Artillery', move: 3, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false },
+    soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10, firesAfterMoving: true, buildTurns: 1 },
+    artillery: { name: 'Artillery', move: 3, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false, buildTurns: 3 },
   };
 
   const CONFIG = {
@@ -41,9 +47,10 @@
     keepRadius: 3, // defenders enter within this hex distance of the keep
     keepHp: 40,
     keepDefence: 4,
-    unitsPerSide: 12,
-    artilleryPerSide: 3, // the rest are soldiers
-    entriesPerTurn: 1,
+    attackerUnits: 12,
+    attackerArtillery: 3, // the rest are soldiers
+    attackerEntriesPerTurn: 1,
+    initialBuildQueue: ['soldier'], // what the defender starts out building
     damageBase: 3, // average damage when attack power equals defence power
   };
 
@@ -106,8 +113,8 @@
 
   function makePool(config, rng) {
     const pool = [];
-    for (let i = 0; i < config.unitsPerSide; i++) {
-      pool.push(i < config.artilleryPerSide ? 'artillery' : 'soldier');
+    for (let i = 0; i < config.attackerUnits; i++) {
+      pool.push(i < config.attackerArtillery ? 'artillery' : 'soldier');
     }
     return shuffle(pool, rng);
   }
@@ -127,7 +134,10 @@
       cells: buildGrid(config.width),
       keep: { ...KEEP_POS, hp: config.keepHp, maxHp: config.keepHp },
       pieces: new Map(), // key -> unit
-      pools: { [ATTACKER]: makePool(config, rng), [DEFENDER]: makePool(config, rng) },
+      pools: { [ATTACKER]: makePool(config, rng) },
+      buildQueue: [], // defender: [{ id, type, progress }], front first
+      repeatBuild: false,
+      nextBuildId: 1,
       turn: ATTACKER,
       turnNumber: 1,
       winner: null,
@@ -137,6 +147,7 @@
       current: null, // what has happened during the current turn
       lastTurn: null, // the record of the previous turn
     };
+    for (const type of config.initialBuildQueue) queueUnit(game, type);
     startTurn(game);
     return game;
   }
@@ -179,16 +190,89 @@
       p.fired = false;
       p.held = false;
     }
-    for (let i = 0; i < game.config.entriesPerTurn; i++) {
-      if (!game.pools[player].length) break;
-      const cells = entryCells(game, player);
-      if (!cells.length) break;
-      const cell = cells[Math.floor(game.rng() * cells.length)];
-      const type = game.pools[player].pop();
-      const unit = addUnit(game, player, type, cell.q, cell.r);
-      game.current.entered.push({ id: unit.id, q: cell.q, r: cell.r });
-      addLog(game, `${UNITS[type].name} entered at (${cell.q}, ${cell.r})`);
+    if (player === ATTACKER) {
+      for (let i = 0; i < game.config.attackerEntriesPerTurn; i++) {
+        if (!game.pools[ATTACKER].length) break;
+        if (!enter(game, ATTACKER, game.pools[ATTACKER][game.pools[ATTACKER].length - 1])) break;
+        game.pools[ATTACKER].pop();
+      }
+    } else {
+      advanceBuild(game);
     }
+  }
+
+  /** Put a new unit on a random entry cell. Returns the unit, or null if there's no room. */
+  function enter(game, player, type) {
+    const cells = entryCells(game, player);
+    if (!cells.length) return null;
+    const cell = cells[Math.floor(game.rng() * cells.length)];
+    const unit = addUnit(game, player, type, cell.q, cell.r);
+    game.current.entered.push({ id: unit.id, q: cell.q, r: cell.r });
+    addLog(game, `${UNITS[type].name} entered at (${cell.q}, ${cell.r})`);
+    return unit;
+  }
+
+  // ---------- defender build queue ----------
+
+  /**
+   * Progress the front of the build queue by one turn, and deploy it if it's
+   * finished. A finished unit with nowhere to go waits at the front.
+   */
+  function advanceBuild(game) {
+    const item = game.buildQueue[0];
+    if (!item) return;
+    item.progress = Math.min(item.progress + 1, UNITS[item.type].buildTurns);
+    if (item.progress < UNITS[item.type].buildTurns) return;
+    if (!enter(game, DEFENDER, item.type)) {
+      addLog(game, `${UNITS[item.type].name} is ready but there is no room near the keep`);
+      return;
+    }
+    game.buildQueue.shift();
+    if (game.repeatBuild) queueUnit(game, item.type);
+  }
+
+  /** Add a unit to the end of the defender's build queue. */
+  function queueUnit(game, type) {
+    if (!UNITS[type]) return fail(`Unknown unit type: ${type}`);
+    if (game.winner) return fail('The game is over.');
+    const item = { id: game.nextBuildId++, type, progress: 0 };
+    game.buildQueue.push(item);
+    return { ok: true, item };
+  }
+
+  /** Remove an item from the build queue. Any progress on it is lost. */
+  function removeFromQueue(game, itemId) {
+    const index = game.buildQueue.findIndex((i) => i.id === itemId);
+    if (index < 0) return fail('That item is not in the queue.');
+    const [item] = game.buildQueue.splice(index, 1);
+    return { ok: true, item };
+  }
+
+  /** Move a queued item up (-1) or down (+1). */
+  function moveInQueue(game, itemId, delta) {
+    const q = game.buildQueue;
+    const index = q.findIndex((i) => i.id === itemId);
+    const to = index + delta;
+    if (index < 0 || to < 0 || to >= q.length) return fail("That item can't move there.");
+    [q[index], q[to]] = [q[to], q[index]];
+    return { ok: true };
+  }
+
+  function setRepeatBuild(game, on) {
+    game.repeatBuild = !!on;
+  }
+
+  /**
+   * Defender turns until each queued item enters, counting from now. The
+   * front item gains progress at the start of each defender turn; the next
+   * item starts only after the one ahead of it is done.
+   */
+  function buildSchedule(game) {
+    let turns = 0;
+    return game.buildQueue.map((item) => {
+      turns += UNITS[item.type].buildTurns - item.progress;
+      return { item, turnsLeft: Math.max(1, turns) };
+    });
   }
 
   /**
@@ -454,6 +538,11 @@
     fire,
     move,
     undoMove,
+    queueUnit,
+    removeFromQueue,
+    moveInQueue,
+    setRepeatBuild,
+    buildSchedule,
     canUndo,
     canFire,
     endTurn,
