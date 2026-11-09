@@ -47,8 +47,13 @@ test('CPU soldiers advance on the keep when unopposed', () => {
 test('CPU artillery moves into range of the keep and stops short of it', () => {
   const game = emptyGame();
   game.pools.attacker = [];
-  const a = put(game, G.ATTACKER, 'artillery', 6, 0);
-  playMoves(game, seeded(3));
+  const a = put(game, G.ATTACKER, 'artillery', 7, 0);
+  // Artillery moves 1 cell a turn, so give it a few turns to get there.
+  for (let t = 0; t < 5; t++) {
+    playMoves(game, seeded(3 + t));
+    G.endTurn(game);
+    G.endTurn(game);
+  }
   const d = G.hexDistance(a, game.keep);
   assert.ok(d >= 2 && d <= 4, `artillery at distance ${d}`);
 });

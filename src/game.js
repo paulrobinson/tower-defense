@@ -18,11 +18,13 @@
  *          unit is put back at the end of the queue.
  *   2. The player may move every one of their units once, up to the unit's
  *      move distance, through empty cells.
- *      Moves can be undone until the turn ends.
+ *      Until the turn ends, a moved unit can be walked back along its path.
  *   3. When the turn ends, each of that player's units attacks one enemy in
  *      its attack radius (attackers may target the keep). Damage is random,
  *      scaled by attack power / defence power. Units at 0 HP die.
- *      Artillery that moved this turn does not fire.
+ *      Artillery that moved this turn does not fire. A unit attacks the
+ *      default target (see chooseTarget) unless the player picked another
+ *      enemy in range with setTarget.
  */
 (function (root, factory) {
   const api = factory();
@@ -39,7 +41,7 @@
 
   const UNITS = {
     soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10, firesAfterMoving: true, buildTurns: 1 },
-    artillery: { name: 'Artillery', move: 3, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false, buildTurns: 3 },
+    artillery: { name: 'Artillery', move: 1, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false, buildTurns: 3 },
   };
 
   const CONFIG = {
@@ -189,6 +191,7 @@
       p.moved = false;
       p.fired = false;
       p.held = false;
+      p.aim = null; // player-chosen target id for this turn
     }
     if (player === ATTACKER) {
       for (let i = 0; i < game.config.attackerEntriesPerTurn; i++) {
@@ -333,6 +336,17 @@
    * HP left after an average hit, then lowest id.
    */
   function chooseTarget(game, unit, from = unit) {
+    if (unit.aim != null) {
+      const picked = [...game.pieces.values()].find((p) => p.id === unit.aim);
+      if (picked && picked.owner !== unit.owner && inAttackRange(unit.type, hexDistance(from, picked))) {
+        return { keep: false, unit: picked, q: picked.q, r: picked.r, picked: true };
+      }
+    }
+    return defaultTarget(game, unit, from);
+  }
+
+  /** The target a unit picks by itself (see chooseTarget). */
+  function defaultTarget(game, unit, from = unit) {
     if (unit.owner === ATTACKER && inAttackRange(unit.type, hexDistance(from, game.keep))) {
       return { keep: true, q: game.keep.q, r: game.keep.r };
     }
@@ -348,6 +362,45 @@
       }
     }
     return best && { keep: false, unit: best, q: best.q, r: best.r };
+  }
+
+  /** Enemy units the unit could attack from `from`. */
+  function targetsInRange(game, unit, from = unit) {
+    return piecesOf(game, other(unit.owner)).filter((e) => inAttackRange(unit.type, hexDistance(from, e)));
+  }
+
+  /**
+   * Choose which enemy unit this unit attacks when the turn ends, instead of
+   * its default. The choice lasts while the target stays in range this turn;
+   * pass null to go back to the default.
+   */
+  function setTarget(game, unit, targetUnit) {
+    if (game.winner) return fail('The game is over.');
+    if (unit.owner !== game.turn) return fail("That isn't your unit.");
+    if (targetUnit === null) {
+      unit.aim = null;
+      return { ok: true };
+    }
+    if (!targetUnit || targetUnit.owner === unit.owner) return fail('Pick an enemy unit.');
+    if (!inAttackRange(unit.type, hexDistance(unit, targetUnit))) return fail("That enemy is out of this unit's range.");
+    unit.aim = targetUnit.id;
+    return { ok: true };
+  }
+
+  /** The smallest and largest damage a hit can roll, and the average. */
+  function damageRange(game, attackerType, defence) {
+    const avg = expectedDamage(game, attackerType, defence);
+    return {
+      min: Math.max(1, Math.round(avg * 0.5)),
+      max: Math.max(1, Math.round(avg * 1.5 - 1e-9)), // rng() < 1, so 1.5x is never reached
+      avg,
+    };
+  }
+
+  /** Damage range for `unit` hitting `target` (a unit, or { keep: true }). */
+  function damageAgainst(game, unit, target) {
+    const defence = target.keep ? game.config.keepDefence : stats(target.unit || target).defence;
+    return damageRange(game, unit.type, defence);
   }
 
   /** Can this unit fire this turn? Artillery that has moved cannot. */
@@ -480,6 +533,47 @@
     return { ok: true, record, unit };
   }
 
+  /**
+   * Cells a moved unit can walk back to this turn: the cells along its path,
+   * newest first, ending at where it started. Walking back stops at any cell
+   * another unit has since moved into.
+   */
+  function stepBackCells(game, unit) {
+    if (game.winner || unit.owner !== game.turn) return [];
+    const record = game.current.moves.find((m) => m.unitId === unit.id);
+    if (!record) return [];
+    const trail = [record.from, ...record.path]; // start ... current
+    const cells = [];
+    for (let i = trail.length - 2; i >= 0; i--) {
+      if (pieceAt(game, trail[i].q, trail[i].r)) break;
+      cells.push({ q: trail[i].q, r: trail[i].r, index: i, path: trail.slice(i, trail.length - 1).reverse() });
+    }
+    return cells;
+  }
+
+  /**
+   * Walk a moved unit back along its path to `to`. Walking all the way back
+   * to the start cancels the move, so the unit can move again (and artillery
+   * can fire). Returns { ok, path } where path is the cells stepped through.
+   */
+  function stepBack(game, unit, to) {
+    if (game.winner) return fail('The game is over.');
+    const option = stepBackCells(game, unit).find((c) => samePos(c, to));
+    if (!option) return fail('Units can only walk back along the path they took this turn.');
+    const record = game.current.moves.find((m) => m.unitId === unit.id);
+    game.pieces.delete(key(unit.q, unit.r));
+    unit.q = to.q;
+    unit.r = to.r;
+    game.pieces.set(key(unit.q, unit.r), unit);
+    if (option.index === 0) {
+      game.current.moves.splice(game.current.moves.indexOf(record), 1);
+      unit.moved = false;
+    } else {
+      record.path = record.path.slice(0, option.index);
+    }
+    return { ok: true, path: option.path, backToStart: option.index === 0 };
+  }
+
   /** Can the given unit's move (or the latest move) be undone right now? */
   function canUndo(game, unitId) {
     const moves = game.current.moves;
@@ -545,6 +639,13 @@
     buildSchedule,
     canUndo,
     canFire,
+    stepBackCells,
+    stepBack,
+    setTarget,
+    targetsInRange,
+    defaultTarget,
+    damageRange,
+    damageAgainst,
     endTurn,
     capitalise,
     other,

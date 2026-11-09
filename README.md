@@ -22,7 +22,7 @@ You play the defenders. The CPU plays the attackers.
 | Unit      | Move | Attack | Defence | Attack radius | HP | Build time |
 |-----------|------|--------|---------|---------------|----|------------|
 | Soldier   | 2    | 2      | 2       | 1             | 10 | 1 turn     |
-| Artillery | 3    | 5      | 1       | 2–4           | 10 | 3 turns    |
+| Artillery | 1    | 5      | 1       | 2–4           | 10 | 3 turns    |
 
 Artillery can't fire on a turn it moves.
 
@@ -37,12 +37,19 @@ Each turn:
      If there's no room near the keep, a finished unit waits at the front of the queue.
 2. The player moves any or all of their units once each, through empty cells.
    Units can't move onto other units or the keep.
-   Any move can be undone until the turn ends (Undo button, or Ctrl/⌘+Z for the latest move),
-   as long as no other unit has since moved into the cell it started from.
+   Until the turn ends, a moved unit can be walked back along its path: select it and tap a cell
+   it passed through. Walking it all the way back cancels the move, so it can move again.
+   It can't walk back through a cell another unit has since moved into.
 3. When the turn ends, each of that player's units attacks one enemy within its attack radius.
    Attackers always prefer the keep; otherwise a unit targets the enemy closest to dying.
+   The defender can pick a different target: select the unit and tap another enemy in range
+   (tap it again to go back to the default).
    Damage is random: 3 × attack ÷ defence, scaled by a random factor between 0.5 and 1.5.
    A unit at 0 HP is destroyed. Artillery that moved this turn doesn't fire.
+
+While planning, each targeted enemy shows the damage range it will take when you end the turn,
+summed over all your units aiming at it: amber if it might be destroyed, red with ✕ if it will be.
+Hovering a destination previews what the unit would hit from there.
 
 **Attackers win** by destroying the keep. **Defenders win** by destroying all 12 attackers.
 

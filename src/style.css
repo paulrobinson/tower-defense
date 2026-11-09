@@ -55,11 +55,27 @@ body {
 }
 
 header {
-  text-align: center;
-  padding: 16px 16px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-block: 16px 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
+.title { min-width: 0; }
+button.new-game {
+  flex: none;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--muted);
+}
+button.new-game.armed { background: var(--attacker); border-color: var(--attacker); color: #fff; font-weight: 600; }
 
-h1 { margin: 0; font-size: 1.6rem; }
+h1 { margin: 0; font-size: 1.6rem; text-wrap: balance; }
 .subtitle { margin: 4px 0 0; color: var(--muted); }
 
 main {
@@ -113,6 +129,7 @@ main {
 .cell.in-range.attacker { fill: var(--attacker-soft); }
 .cell.target { stroke: var(--select); stroke-width: 2.5; fill: rgba(242, 183, 5, 0.3); }
 .cell.target.in-range { fill: rgba(242, 183, 5, 0.45); }
+.cell.target.back { stroke: var(--defender); stroke-dasharray: 4 3; fill: var(--defender-soft); }
 .cell.selected { stroke: var(--select); stroke-width: 3; }
 
 .keep-piece { cursor: pointer; }
@@ -133,7 +150,28 @@ main {
 
 .aims { pointer-events: none; }
 .aim { stroke: var(--defender); stroke-width: 1.6; stroke-dasharray: 2 4; stroke-linecap: round; opacity: 0.8; }
-.crosshair { fill: none; stroke: var(--defender); stroke-width: 1.6; stroke-dasharray: 3 3; }
+.crosshair { fill: none; stroke: var(--defender); stroke-width: 1.8; stroke-dasharray: 3 3; }
+.crosshair.maybe { stroke: var(--hp-mid); stroke-width: 2.2; }
+.crosshair.kill { stroke: var(--hp-low); stroke-width: 2.6; stroke-dasharray: none; }
+.aim.selected { stroke-width: 2.6; opacity: 1; }
+.aim.picked { stroke-dasharray: 6 3; }
+.aim.preview { stroke: var(--select); stroke-width: 2.4; stroke-dasharray: 4 3; opacity: 1; }
+.piece.candidate .body { stroke: var(--select); stroke-width: 2.5; stroke-dasharray: 3 2; }
+
+.labels, .preview { pointer-events: none; }
+.dmg-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-anchor: middle;
+  fill: var(--defender);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dmg-label.maybe { fill: var(--hp-mid); }
+.dmg-label.kill { fill: var(--hp-low); }
+.dmg-label.note { fill: var(--muted); font-weight: 700; }
 
 .fx { pointer-events: none; }
 .shell { stroke: var(--bg); stroke-width: 1.2; }

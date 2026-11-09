@@ -32,7 +32,6 @@
     message: document.getElementById('message'),
     log: document.getElementById('log'),
     endBtn: document.getElementById('end-btn'),
-    undoBtn: document.getElementById('undo-btn'),
     newBtn: document.getElementById('new-btn'),
   };
 
@@ -47,6 +46,7 @@
   // Persistent SVG layers: `scene` is redrawn on every render, `fx` holds transient effects.
   let scene;
   let fx;
+  let previewLayer; // hover preview, inside `scene`
 
   const toPixel = ({ q, r }) => ({
     x: HEX_SIZE * SQRT3 * (q + r / 2),
@@ -303,17 +303,24 @@
 
     const myTurn = !busy && !game.winner && game.turn === HUMAN;
     const selectedUnit = selected && G.pieceAt(game, selected.q, selected.r);
+    const mine = selectedUnit && myTurn && selectedUnit.owner === HUMAN;
     const moveTargets = new Set();
-    if (selectedUnit && myTurn && selectedUnit.owner === HUMAN) {
+    const backTargets = new Set();
+    if (mine) {
       for (const m of G.movesFor(game, selected.q, selected.r)) moveTargets.add(G.key(m.q, m.r));
+      for (const c of G.stepBackCells(game, selectedUnit)) backTargets.add(G.key(c.q, c.r));
     }
     const inRange = selectedUnit ? rangeCells(selectedUnit.type, selectedUnit) : new Set();
+    // Enemies the selected unit could attack instead (tap one to switch).
+    const candidates = mine && G.canFire(selectedUnit) ? G.targetsInRange(game, selectedUnit) : [];
 
     const cellsLayer = el('g', { class: 'cells' }, scene);
     const markLayer = el('g', { class: 'marks' }, scene);
     const aimLayer = el('g', { class: 'aims' }, scene);
     const piecesLayer = el('g', { class: 'pieces' }, scene);
     const arrowLayer = el('g', { class: 'arrows' }, scene);
+    const labelLayer = el('g', { class: 'labels' }, scene);
+    previewLayer = el('g', { class: 'preview' }, scene);
 
     for (const cell of game.cells.values()) {
       const k = G.key(cell.q, cell.r);
@@ -323,12 +330,13 @@
       if (G.hexDistance(cell, game.keep) <= game.config.keepRadius) classes.push('keep-zone');
       if (inRange.has(k)) classes.push(`in-range ${selectedUnit.owner}`);
       if (moveTargets.has(k)) classes.push('target');
+      if (backTargets.has(k)) classes.push('target back');
       if (selected && G.samePos(selected, cell)) classes.push('selected');
       const hex = el('polygon', { points: hexPoints(x, y), class: classes.join(' '), 'data-key': k }, cellsLayer);
       hex.addEventListener('click', () => onCellClick(cell));
-      if (moveTargets.has(k)) {
-        hex.addEventListener('mouseenter', () => previewRange(selectedUnit, cell));
-        hex.addEventListener('mouseleave', () => previewRange(selectedUnit, selectedUnit));
+      if (moveTargets.has(k) || backTargets.has(k)) {
+        hex.addEventListener('mouseenter', () => previewFrom(selectedUnit, cell));
+        hex.addEventListener('mouseleave', () => previewFrom(selectedUnit, null));
       }
     }
 
@@ -347,6 +355,7 @@
       if (selected && G.samePos(selected, unit)) classes.push('selected');
       if (unit.owner === game.turn && unit.moved && !game.winner && !busy) classes.push('done');
       if (enteringIds.has(unit.id)) classes.push('entering');
+      if (candidates.includes(unit)) classes.push('candidate');
       const g = el('g', { class: classes.join(' '), 'data-id': unit.id }, piecesLayer);
       const inner = el('g', { class: 'piece-inner', style: `transform-origin: ${x}px ${y}px` }, g);
       drawUnit(inner, unit, x, y);
@@ -354,16 +363,31 @@
       g.addEventListener('click', () => onCellClick(unit));
     }
 
-    // Aim lines: who your units will fire at when you end the turn.
+    // Aim lines: who each of your units will fire at when you end the turn,
+    // moved or not, with the damage each target can expect.
     if (myTurn) {
+      const totals = new Map(); // target id -> { target, min, max }
       for (const unit of G.piecesOf(game, HUMAN)) {
         if (!G.canFire(unit)) continue;
         const target = G.chooseTarget(game, unit);
         if (!target) continue;
         const a = toPixel(unit);
         const b = toPixel(target);
-        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: 'aim' }, aimLayer);
-        drawCrosshair(aimLayer, b.x, b.y);
+        const isSel = selectedUnit === unit;
+        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: `aim${isSel ? ' selected' : ''}${target.picked ? ' picked' : ''}` }, aimLayer);
+        const dmg = G.damageAgainst(game, unit, target);
+        const id = target.keep ? 'keep' : target.unit.id;
+        const t = totals.get(id) || { target, min: 0, max: 0 };
+        t.min += dmg.min;
+        t.max += dmg.max;
+        totals.set(id, t);
+      }
+      for (const { target, min, max } of totals.values()) {
+        const hp = target.keep ? game.keep.hp : target.unit.hp;
+        const fate = min >= hp ? 'kill' : max >= hp ? 'maybe' : '';
+        const b = toPixel(target);
+        drawCrosshair(aimLayer, b.x, b.y, fate);
+        drawDamageLabel(labelLayer, b.x, b.y, min, max, fate);
       }
     }
 
@@ -381,14 +405,37 @@
     renderPanel();
   }
 
-  /** While hovering a move target, show the attack radius from there. */
-  function previewRange(unit, from) {
+  /**
+   * While hovering a destination, show the attack radius from there and who
+   * the unit would hit, with the damage. `cell` null restores the normal view.
+   */
+  function previewFrom(unit, cell) {
     if (!unit) return;
+    const from = cell || unit;
     const set = rangeCells(unit.type, from);
     for (const node of scene.querySelectorAll('.cells .cell')) {
       node.classList.toggle('in-range', set.has(node.getAttribute('data-key')));
       node.classList.toggle(unit.owner, set.has(node.getAttribute('data-key')));
     }
+    previewLayer.replaceChildren();
+    if (!cell) return;
+    const p = toPixel(cell);
+    // Walking all the way back cancels the move, so artillery could fire again.
+    const backToStart = unit.moved && G.stepBackCells(game, unit).some((c) => c.index === 0 && G.samePos(c, cell));
+    const willMove = backToStart ? false : !G.samePos(cell, unit);
+    if (willMove && !G.UNITS[unit.type].firesAfterMoving) {
+      drawNote(previewLayer, p.x, p.y + HEX_SIZE * 0.05, "won't fire");
+      return;
+    }
+    const target = G.chooseTarget(game, unit, cell);
+    if (!target) return;
+    const b = toPixel(target);
+    el('line', { x1: p.x, y1: p.y, x2: b.x, y2: b.y, class: 'aim preview' }, previewLayer);
+    const dmg = G.damageAgainst(game, unit, target);
+    const hp = target.keep ? game.keep.hp : target.unit.hp;
+    const fate = dmg.min >= hp ? 'kill' : dmg.max >= hp ? 'maybe' : '';
+    drawCrosshair(previewLayer, b.x, b.y, fate);
+    drawDamageLabel(previewLayer, b.x, b.y, dmg.min, dmg.max, fate);
   }
 
   function drawUnit(group, unit, x, y) {
@@ -428,9 +475,21 @@
     el('rect', { x: x - width / 2, y, width: width * ratio, height: h, rx: 1.5, class: `hp-fill ${owner} ${level}` }, group);
   }
 
-  function drawCrosshair(layer, x, y) {
+  function drawCrosshair(layer, x, y, fate = '') {
     const r = HEX_SIZE * 0.78;
-    el('circle', { cx: x, cy: y, r, class: 'crosshair' }, layer);
+    el('circle', { cx: x, cy: y, r, class: `crosshair ${fate}` }, layer);
+  }
+
+  /** Expected damage above a target, e.g. "−2–4". Red if it will die, amber if it might. */
+  function drawDamageLabel(layer, x, y, min, max, fate) {
+    const text = min === max ? `−${min}` : `−${min}–${max}`;
+    const label = el('text', { x, y: y - HEX_SIZE * 0.88, class: `dmg-label ${fate}` }, layer);
+    label.textContent = fate === 'kill' ? `${text} ✕` : text;
+  }
+
+  function drawNote(layer, x, y, text) {
+    const note = el('text', { x, y, class: 'dmg-label note' }, layer);
+    note.textContent = text;
   }
 
   function drawRing(layer, cell, cls) {
@@ -493,10 +552,6 @@
     els.keepHp.textContent = `${game.keep.hp} / ${game.keep.maxHp}`;
     els.message.textContent = message;
     els.endBtn.disabled = busy || !!game.winner || game.turn !== HUMAN;
-    const undoUnit = undoTarget();
-    els.undoBtn.textContent = undoUnit ? 'Undo this move' : 'Undo last move';
-    els.undoBtn.disabled =
-      busy || !!game.winner || game.turn !== HUMAN || !G.canUndo(game, undoUnit ? undoUnit.id : undefined);
 
     els.log.replaceChildren();
     for (const entry of [...game.log].reverse().slice(0, 120)) {
@@ -578,46 +633,50 @@
     let text = `${whose} ${s.name.toLowerCase()}: ${unit.hp}/${unit.maxHp} HP, moves ${s.move}, ` +
       `attack ${s.attack}, defence ${s.defence}, hits targets ${range} away.`;
     if (!s.firesAfterMoving) text += ` It can't fire on a turn it moves.`;
-    if (unit.owner === HUMAN && game.turn === HUMAN && unit.moved) {
-      text += G.canFire(unit) ? ' It has moved this turn.' : ' It has moved this turn, so it won\'t fire.';
-      text += G.canUndo(game, unit.id) ? ' Press Undo this move to put it back.' : '';
+    if (unit.owner === HUMAN && game.turn === HUMAN) {
+      if (unit.moved) {
+        text += G.stepBackCells(game, unit).length
+          ? ' It has moved: tap a cell on its path to walk it back.'
+          : ' It has moved this turn.';
+      }
+      text += ' ' + describeAttack(unit);
     }
     return text;
   }
 
-  /** The selected unit, if it's one of yours that moved this turn. */
-  function undoTarget() {
-    const unit = selected && G.pieceAt(game, selected.q, selected.r);
-    return unit && unit.owner === HUMAN && unit.moved ? unit : null;
+  /** What the unit will attack at the end of the turn, for planning. */
+  function describeAttack(unit) {
+    if (!G.canFire(unit)) return "It moved, so it won't fire this turn.";
+    const target = G.chooseTarget(game, unit);
+    if (!target) return 'No enemies in range.';
+    const dmg = G.damageAgainst(game, unit, target);
+    const amount = dmg.min === dmg.max ? `${dmg.min}` : `${dmg.min}–${dmg.max}`;
+    const what = target.keep
+      ? `the keep (${game.keep.hp} HP)`
+      : `the enemy ${G.UNITS[target.unit.type].name.toLowerCase()} (${target.unit.hp} HP)`;
+    let text = `Will attack ${what} for ${amount} damage.`;
+    const options = G.targetsInRange(game, unit).length;
+    if (target.picked) text += ' You picked this target; tap it again to switch back to the default.';
+    else if (options > 1) text += ` ${options} enemies are in range: tap another to attack it instead.`;
+    return text;
   }
 
-  /** Undo the selected unit's move, or the latest move. Animates the unit back. */
-  async function undo() {
-    if (busy || game.winner || game.turn !== HUMAN) return;
-    const target = undoTarget();
-    const moves = game.current.moves;
-    const record = target ? moves.find((m) => m.unitId === target.id) : moves[moves.length - 1];
-    if (!record) return;
-    if (!G.canUndo(game, record.unitId)) {
-      message = 'Another unit is standing where this one started. Undo that unit first.';
-      render();
-      return;
-    }
+  /** Animate a moved unit back along its path to `cell`, then apply it. */
+  async function walkBack(unit, cell) {
+    const option = G.stepBackCells(game, unit).find((c) => G.samePos(c, cell));
+    if (!option) return;
     busy = true;
-    selected = null;
     render();
-    const unit = game.pieces.get(G.key(record.path[record.path.length - 1].q, record.path[record.path.length - 1].r));
-    const back = [...record.path].reverse().concat([record.from]);
-    const node = unit && scene.querySelector(`[data-id="${unit.id}"]`);
-    if (node && TIMING.human > 0) await tween(node, toPixel(back[0]), back.map(toPixel), TIMING.human);
-    const res = G.undoMove(game, record.unitId);
-    busy = false;
-    if (res.ok) {
-      selected = { q: res.unit.q, r: res.unit.r };
-      message = `Move undone. ${describeUnit(res.unit)}`;
-    } else {
-      message = res.reason;
+    const node = scene.querySelector(`[data-id="${unit.id}"]`);
+    if (node && TIMING.human > 0) {
+      await tween(node, toPixel(unit), [unit, ...option.path].map(toPixel), TIMING.human);
     }
+    const res = G.stepBack(game, unit, cell);
+    busy = false;
+    selected = { q: unit.q, r: unit.r };
+    message = res.ok
+      ? `${res.backToStart ? 'Back where it started; it can move again.' : 'Walked back.'} ${describeUnit(unit)}`
+      : res.reason;
     render();
   }
 
@@ -625,12 +684,12 @@
     const left = G.unmovedPieces(game).length;
     if (left === 0) return 'All your units have moved. Press End turn to fire.';
     const plural = left === 1 ? 'unit' : 'units';
-    return `${left} ${plural} still to move. Click a unit to see its moves and range. Your units fire when you end the turn.`;
+    return `${left} ${plural} still to move. Tap a unit to see its moves, range and target. Numbers over enemies show the damage they'll take when you end the turn.`;
   }
 
   function describeWinner() {
     return game.winner === G.ATTACKER
-      ? 'The attackers destroyed the keep. Press New game to try again.'
+      ? 'The attackers destroyed the keep. Press New game (top of the page) to try again.'
       : 'Every attacker has been destroyed. Well defended!';
   }
 
@@ -641,8 +700,28 @@
     const unit = G.pieceAt(game, q, r);
     const selectedUnit = selected && G.pieceAt(game, selected.q, selected.r);
 
+    const mine = selectedUnit && selectedUnit.owner === HUMAN && game.turn === HUMAN;
+
+    // Walk a moved unit back along its path.
+    if (mine && !unit && G.stepBackCells(game, selectedUnit).some((c) => G.samePos(c, { q, r }))) {
+      await walkBack(selectedUnit, { q, r });
+      return;
+    }
+
+    // Pick a different enemy for the selected unit to attack (tap again to undo the pick).
+    if (mine && unit && unit.owner !== HUMAN && G.canFire(selectedUnit) &&
+        G.targetsInRange(game, selectedUnit).includes(unit)) {
+      const current = G.chooseTarget(game, selectedUnit);
+      const res = current && current.picked && current.unit === unit
+        ? G.setTarget(game, selectedUnit, null)
+        : G.setTarget(game, selectedUnit, unit);
+      message = res.ok ? describeUnit(selectedUnit) : res.reason;
+      render();
+      return;
+    }
+
     // Move the selected unit if this is one of its destinations.
-    if (selectedUnit && selectedUnit.owner === HUMAN && game.turn === HUMAN && !unit) {
+    if (mine && !unit) {
       const legal = G.movesFor(game, selected.q, selected.r).some((t) => G.samePos(t, { q, r }));
       if (legal) {
         const from = selected;
@@ -651,7 +730,9 @@
         render();
         const res = await animatedMove(from, { q, r }, TIMING.human);
         busy = false;
-        message = res.ok ? yourTurnMessage() : res.reason;
+        // Keep it selected so its new target and damage are visible straight away.
+        selected = { q, r };
+        message = res.ok ? describeUnit(selectedUnit) : res.reason;
         render();
         return;
       }
@@ -678,7 +759,7 @@
 
     if (selectedUnit && selectedUnit.owner === HUMAN) {
       message = selectedUnit.moved
-        ? 'That unit has already moved this turn. Press Undo this move to move it again.'
+        ? 'That unit has already moved. Tap a cell on its path to walk it back.'
         : `That's out of reach. ${G.UNITS[selectedUnit.type].name} moves up to ${G.UNITS[selectedUnit.type].move} cells through empty spaces.`;
     } else {
       selected = null;
@@ -691,16 +772,28 @@
   els.buildSoldier.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'soldier')));
   els.buildArtillery.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'artillery')));
   els.repeatBuild.addEventListener('change', () => editQueue(() => G.setRepeatBuild(game, els.repeatBuild.checked)));
-  els.undoBtn.addEventListener('click', undo);
-  els.newBtn.addEventListener('click', newGame);
-
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      selected = null; // Ctrl/Cmd+Z always undoes the latest move
-      undo();
+  // New game sits away from the turn controls and asks for a second click,
+  // so a stray tap can't throw away a game in progress.
+  let newGameTimer = null;
+  function disarmNewGame() {
+    clearTimeout(newGameTimer);
+    newGameTimer = null;
+    els.newBtn.classList.remove('armed');
+    els.newBtn.textContent = 'New game';
+  }
+  els.newBtn.addEventListener('click', () => {
+    const inProgress = !game.winner && game.turnNumber > 1;
+    if (!inProgress || els.newBtn.classList.contains('armed')) {
+      disarmNewGame();
+      newGame();
       return;
     }
+    els.newBtn.classList.add('armed');
+    els.newBtn.textContent = 'Abandon this game? Click again';
+    newGameTimer = setTimeout(disarmNewGame, 4000);
+  });
+
+  document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && selected && !busy) {
       selected = null;
       message = game.turn === HUMAN ? yourTurnMessage() : '';

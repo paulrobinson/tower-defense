@@ -70,15 +70,15 @@ test('units enter at random: attackers on the edge, defenders near the keep', ()
   assert.ok(attackerCells.size > 5, 'entry cells vary');
 });
 
-test('every unit may move once per turn; soldiers 2 cells, artillery 3', () => {
+test('every unit may move once per turn; soldiers 2 cells, artillery 1', () => {
   const game = emptyGame();
   const s = put(game, G.ATTACKER, 'soldier', 8, 0);
   const a = put(game, G.ATTACKER, 'artillery', -8, 0);
   assert.equal(G.move(game, s, { q: 5, r: 0 }).ok, false, 'soldier cannot move 3');
   assert.ok(G.move(game, s, { q: 6, r: 0 }).ok);
   assert.equal(G.move(game, s, { q: 5, r: 0 }).ok, false, 'already moved');
-  assert.equal(G.move(game, a, { q: -4, r: 0 }).ok, false, 'artillery cannot move 4');
-  assert.ok(G.move(game, a, { q: -5, r: 0 }).ok);
+  assert.equal(G.move(game, a, { q: -6, r: 0 }).ok, false, 'artillery cannot move 2');
+  assert.ok(G.move(game, a, { q: -7, r: 0 }).ok);
 });
 
 test('units cannot move onto or through other units or the keep', () => {
@@ -358,4 +358,110 @@ test('a finished unit waits at the front if there is no room near the keep', () 
   assert.equal(game.buildQueue.length, 1);
   assert.equal(game.buildQueue[0].progress, 1);
   assert.equal(G.buildSchedule(game)[0].turnsLeft, 1);
+});
+
+// ---------- walking back ----------
+
+test('a moved unit can walk back one step along its path', () => {
+  const game = emptyGame();
+  const s = put(game, G.ATTACKER, 'soldier', 8, 0);
+  G.move(game, { q: 8, r: 0 }, { q: 6, r: 0 });
+  const cells = G.stepBackCells(game, s).map((c) => G.key(c.q, c.r));
+  assert.deepEqual(cells, [G.key(7, 0), G.key(8, 0)], 'path cells, newest first');
+  const res = G.stepBack(game, s, { q: 7, r: 0 });
+  assert.ok(res.ok);
+  assert.deepEqual([s.q, s.r], [7, 0]);
+  assert.equal(s.moved, true, 'still counts as moved');
+  assert.deepEqual(game.current.moves[0].path, [{ q: 7, r: 0 }], 'arrow shortened');
+});
+
+test('walking back to the start cancels the move', () => {
+  const game = emptyGame();
+  const art = put(game, G.ATTACKER, 'artillery', 8, 0);
+  const target = put(game, G.DEFENDER, 'soldier', 5, 0);
+  G.move(game, art, { q: 7, r: 0 });
+  assert.equal(G.canFire(art), false);
+  const res = G.stepBack(game, art, { q: 8, r: 0 });
+  assert.ok(res.ok && res.backToStart);
+  assert.equal(art.moved, false);
+  assert.equal(game.current.moves.length, 0);
+  G.endTurn(game);
+  assert.ok(target.hp < 10, 'artillery fires again once back at its start');
+});
+
+test('units can only walk back along their own path, and not through other units', () => {
+  const game = emptyGame();
+  const a = put(game, G.ATTACKER, 'soldier', 4, 0);
+  const b = put(game, G.ATTACKER, 'soldier', 3, 2);
+  G.move(game, { q: 4, r: 0 }, { q: 2, r: 0 }); // via (3, 0), the only route
+  assert.equal(G.stepBack(game, a, { q: 2, r: 1 }).ok, false, 'not on its path');
+  assert.ok(G.move(game, b, { q: 3, r: 0 }).ok); // b now stands on a's path
+  assert.equal(G.stepBackCells(game, a).length, 0);
+  assert.equal(G.stepBack(game, a, { q: 4, r: 0 }).ok, false, 'blocked by b');
+  assert.ok(G.stepBack(game, b, { q: 3, r: 2 }).ok);
+  assert.ok(G.stepBack(game, a, { q: 4, r: 0 }).ok, 'free once b walks back');
+});
+
+test('unmoved units have nowhere to walk back to', () => {
+  const game = emptyGame();
+  const s = put(game, G.ATTACKER, 'soldier', 8, 0);
+  assert.deepEqual(G.stepBackCells(game, s), []);
+});
+
+// ---------- choosing targets ----------
+
+test('the player can pick which enemy in range a unit attacks', () => {
+  const game = emptyGame();
+  const sol = put(game, G.ATTACKER, 'soldier', 6, 0);
+  const weak = put(game, G.DEFENDER, 'soldier', 5, 0);
+  weak.hp = 2; // the default target
+  const strong = put(game, G.DEFENDER, 'artillery', 7, 0);
+  assert.equal(G.chooseTarget(game, sol).unit, weak);
+  assert.ok(G.setTarget(game, sol, strong).ok);
+  assert.equal(G.chooseTarget(game, sol).unit, strong);
+  G.endTurn(game);
+  assert.equal(weak.hp, 2);
+  assert.ok(strong.hp < 10);
+});
+
+test('a picked target must be an enemy in range, and lapses if out of range', () => {
+  const game = emptyGame();
+  const sol = put(game, G.ATTACKER, 'soldier', 6, 0);
+  const near = put(game, G.DEFENDER, 'soldier', 5, 0);
+  const far = put(game, G.DEFENDER, 'soldier', 2, 0);
+  const friend = put(game, G.ATTACKER, 'soldier', 7, 0);
+  assert.equal(G.setTarget(game, sol, far).ok, false);
+  assert.equal(G.setTarget(game, sol, friend).ok, false);
+  assert.ok(G.setTarget(game, sol, near).ok);
+  G.move(game, sol, { q: 6, r: -2 }); // now out of range of `near`
+  assert.equal(G.chooseTarget(game, sol), null);
+  G.stepBack(game, sol, { q: 6, r: 0 });
+  assert.equal(G.chooseTarget(game, sol).unit, near, 'the pick applies again once back in range');
+  assert.ok(G.setTarget(game, sol, null).ok);
+  assert.equal(sol.aim, null);
+});
+
+test('picked targets reset each turn', () => {
+  const game = emptyGame();
+  const sol = put(game, G.ATTACKER, 'soldier', 6, 0);
+  const d = put(game, G.DEFENDER, 'soldier', 5, 0);
+  G.setTarget(game, sol, d);
+  G.endTurn(game);
+  G.endTurn(game);
+  assert.equal(sol.aim, null);
+});
+
+test('damage range matches what can actually be rolled', () => {
+  const game = emptyGame();
+  for (const [atk, def] of [['soldier', 2], ['artillery', 2], ['soldier', 1], ['artillery', 4]]) {
+    const range = G.damageRange(game, atk, def);
+    const seen = new Set();
+    for (let i = 0; i < 2000; i++) {
+      const g = emptyGame({ rng: seeded(9000 + i) });
+      const avg = G.expectedDamage(g, atk, def);
+      seen.add(Math.max(1, Math.round(avg * (0.5 + g.rng()))));
+    }
+    assert.equal(Math.min(...seen), range.min, `${atk} vs defence ${def} min`);
+    assert.equal(Math.max(...seen), range.max, `${atk} vs defence ${def} max`);
+  }
 });

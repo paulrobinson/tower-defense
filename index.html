@@ -8,8 +8,11 @@
   </head>
   <body>
     <header>
-      <h1>Hex Keep Defence</h1>
-      <p class="subtitle">Hold the keep against the CPU attackers</p>
+      <div class="title">
+        <h1>Hex Keep Defence</h1>
+        <p class="subtitle">Hold the keep against the CPU attackers</p>
+      </div>
+      <button id="new-btn" type="button" class="new-game">New game</button>
     </header>
 
     <main>
@@ -40,9 +43,7 @@
         <p id="message" class="message" role="status"></p>
 
         <div class="buttons">
-          <button id="undo-btn" type="button">Undo last move</button>
           <button id="end-btn" type="button" class="primary">End turn &amp; fire</button>
-          <button id="new-btn" type="button">New game</button>
         </div>
 
         <section class="build" aria-labelledby="build-title">
@@ -64,7 +65,7 @@
           </thead>
           <tbody>
             <tr><th scope="row">Soldier</th><td>2</td><td>2</td><td>2</td><td>1</td><td>10</td></tr>
-            <tr><th scope="row">Artillery</th><td>3</td><td>5</td><td>1</td><td>2–4*</td><td>10</td></tr>
+            <tr><th scope="row">Artillery</th><td>1</td><td>5</td><td>1</td><td>2–4*</td><td>10</td></tr>
           </tbody>
         </table>
         <p class="footnote">* Artillery can't fire on a turn it moves.</p>
@@ -77,7 +78,9 @@
             <li>You build as many units as you like from the <strong>build queue</strong>. A soldier takes 1 turn and artillery 3. Only the unit at the front is being built. When it's done it appears at the start of your turn on a random cell near the keep. Turn on <strong>Repeat</strong> to put each finished unit back at the end of the queue.</li>
             <li>The attackers have 12 units: 3 artillery and 9 soldiers. One enters at random on the edge each turn.</li>
             <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range. Artillery that moved this turn holds its fire.</li>
-            <li>Changed your mind? <strong>Undo</strong> takes back the latest move (Ctrl/⌘+Z), or the selected unit's move, any time before you end the turn.</li>
+            <li>Changed your mind? Tap a moved unit, then tap a cell on its path to walk it back. Walking it all the way back lets it move again.</li>
+            <li>The number over each enemy is the damage it will take when you end the turn: amber if it might be destroyed, red with ✕ if it will be.</li>
+            <li>When a unit has more than one enemy in range, select it and tap another enemy to attack that one instead.</li>
             <li>Damage is random, averaging 3 × attack ÷ defence. A unit at 0 HP is destroyed.</li>
             <li>Units can't move through other units or the keep.</li>
             <li>Attackers win by destroying the keep (40 HP, defence 4). You win by destroying all 12 attackers.</li>
