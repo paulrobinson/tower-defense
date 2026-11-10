@@ -65,7 +65,7 @@
     let total = 0;
     for (const { unit: e, cells } of reach) {
       if (cells.some((c) => G.inAttackRange(e.type, G.hexDistance(c, cell)))) {
-        total += G.expectedDamage(game, e.type, defence);
+        total += G.expectedDamage(game, e, defence);
       }
     }
     return total;
@@ -75,9 +75,9 @@
     const target = G.chooseTarget(game, unit, cell);
     if (!target) return 0;
     if (target.keep) {
-      return G.expectedDamage(game, unit.type, game.config.keepDefence) * WEIGHTS.keepDamage;
+      return G.expectedDamage(game, unit, game.config.keepDefence, cell) * WEIGHTS.keepDamage;
     }
-    const dmg = G.expectedDamage(game, unit.type, G.UNITS[target.unit.type].defence);
+    const dmg = G.expectedDamage(game, unit, G.UNITS[target.unit.type].defence, cell);
     let score = Math.min(dmg, target.unit.hp) * WEIGHTS.damage;
     if (dmg >= target.unit.hp) score += WEIGHTS.kill;
     return score;

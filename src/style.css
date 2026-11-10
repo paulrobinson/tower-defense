@@ -16,6 +16,8 @@
   --select: #f2b705;
   --cpu-arrow: #6f6a62;
   --danger: #d0402f;
+  --volt: #1fa3c9;
+  --volt-glow: rgba(64, 196, 240, 0.35);
   --loss-sure: #c0291b;
   --loss-maybe: rgba(224, 92, 76, 0.45);
   --hp-track: rgba(0, 0, 0, 0.18);
@@ -42,6 +44,8 @@
     --keep: #b39d74;
     --cpu-arrow: #b4ada2;
     --danger: #ff6b5b;
+    --volt: #6fdcff;
+    --volt-glow: rgba(111, 220, 255, 0.35);
     --loss-sure: #ff5a48;
     --loss-maybe: rgba(255, 120, 104, 0.5);
     --hp-track: rgba(255, 255, 255, 0.18);
@@ -187,8 +191,29 @@ main {
 
 .unit-icon { width: 20px; height: 20px; flex: none; overflow: visible; cursor: inherit; vertical-align: middle; }
 .unit-icon .body { stroke-width: 1.5; }
-.build-add button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.build-add button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; font-size: 0.85rem; white-space: nowrap; min-width: 0; }
 .build-add .unit-icon { width: 22px; height: 22px; }
+
+/* Tesla soldiers */
+.piece .glyph.bolt-glyph { fill: #fff; stroke: none; }
+.tesla-links { pointer-events: none; }
+.tesla-link { fill: none; stroke: var(--volt); stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 5 3; animation: crackle 0.6s linear infinite; opacity: 0.9; }
+@keyframes crackle { to { stroke-dashoffset: -16; } }
+.badges { pointer-events: none; }
+.attack-badge {
+  font-size: 9px;
+  font-weight: 800;
+  text-anchor: start;
+  fill: var(--volt);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.bolt { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.bolt.glow { stroke: var(--volt-glow); stroke-width: 7; }
+.bolt.core { stroke: var(--volt); stroke-width: 2.2; }
+.bolt.charge { stroke: var(--volt); stroke-width: 1.6; opacity: 0.85; }
 
 .fx { pointer-events: none; }
 .shell { stroke: var(--bg); stroke-width: 1.2; }
@@ -253,6 +278,7 @@ main {
 @keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
+  .tesla-link { animation: none; }
   .burst, .damage,
   .piece.entering .piece-inner, .keep-piece.hit .keep-hex, .turn-banner.thinking .dots span { animation: none; }
 }

@@ -495,3 +495,81 @@ test('threat damage adds up every enemy that could reach the cell', () => {
   assert.equal(t.min, s.min + a.min);
   assert.equal(t.max, s.max + a.max);
 });
+
+// ---------- tesla soldiers ----------
+
+test('tesla soldier stats', () => {
+  const t = G.UNITS.tesla;
+  assert.equal(t.move, 2);
+  assert.equal(t.defence, 2);
+  assert.equal(t.minRange, 1);
+  assert.equal(t.maxRange, 2);
+  assert.equal(t.hp, 15);
+  assert.equal(t.firesAfterMoving, true);
+  assert.equal(t.buildTurns, 2);
+});
+
+test('a lone tesla soldier attacks with 1; a group of n attacks with n squared each', () => {
+  const game = emptyGame();
+  const a = put(game, G.DEFENDER, 'tesla', 0, 3);
+  assert.equal(G.attackOf(game, a), 1);
+  const b = put(game, G.DEFENDER, 'tesla', 2, 3); // 2 away: linked
+  assert.equal(G.attackOf(game, a), 4);
+  assert.equal(G.attackOf(game, b), 4);
+  const c = put(game, G.DEFENDER, 'tesla', 4, 3); // linked to b only, chains to a
+  assert.equal(G.teslaGroup(game, a).length, 3);
+  assert.equal(G.attackOf(game, a), 9);
+  assert.equal(G.attackOf(game, c), 9);
+});
+
+test('tesla soldiers more than 2 apart are not linked, and other units do not count', () => {
+  const game = emptyGame();
+  const a = put(game, G.DEFENDER, 'tesla', 0, 3);
+  put(game, G.DEFENDER, 'tesla', 3, 3); // 3 away
+  put(game, G.DEFENDER, 'soldier', 1, 3); // not a tesla
+  put(game, G.ATTACKER, 'tesla', -1, 3); // enemy tesla
+  assert.equal(G.attackOf(game, a), 1);
+  assert.equal(G.teslaLinks(game, G.DEFENDER).length, 0);
+});
+
+test('group size uses where the tesla soldier would stand', () => {
+  const game = emptyGame();
+  const a = put(game, G.DEFENDER, 'tesla', 0, 3);
+  put(game, G.DEFENDER, 'tesla', 4, 3);
+  assert.equal(G.attackOf(game, a), 1);
+  assert.equal(G.attackOf(game, a, { q: 2, r: 3 }), 4, 'moving within 2 links them');
+});
+
+test('each tesla soldier in a group fires with the group attack', () => {
+  const game = emptyGame();
+  game.turn = G.DEFENDER;
+  game.current.player = G.DEFENDER;
+  put(game, G.DEFENDER, 'tesla', 0, 3);
+  put(game, G.DEFENDER, 'tesla', 1, 3);
+  put(game, G.DEFENDER, 'tesla', 2, 3);
+  const e = put(game, G.ATTACKER, 'soldier', 4, 3); // within 2 of the third tesla only
+  e.hp = 100;
+  e.maxHp = 100;
+  G.endTurn(game);
+  const shots = game.lastTurn.attacks;
+  assert.equal(shots.length, 1, 'only the one in range fires');
+  assert.equal(shots[0].attack, 9);
+  assert.equal(shots[0].chain.length, 3);
+  const r = G.damageRange(game, 'soldier', 2); // reference: base 2 attack
+  assert.ok(shots[0].damage > r.max, 'group attack far exceeds a lone soldier');
+});
+
+test('tesla soldiers hit targets 1 or 2 cells away', () => {
+  assert.ok(G.inAttackRange('tesla', 1));
+  assert.ok(G.inAttackRange('tesla', 2));
+  assert.ok(!G.inAttackRange('tesla', 3));
+});
+
+test('tesla soldiers can be built and take 2 turns', () => {
+  const game = G.createGame({ rng: seeded(31), initialBuildQueue: ['tesla'] });
+  G.endTurn(game); // defender turn: 1 of 2
+  assert.equal(G.piecesOf(game, G.DEFENDER).length, 0);
+  G.endTurn(game);
+  G.endTurn(game); // defender turn: 2 of 2
+  assert.deepEqual(G.piecesOf(game, G.DEFENDER).map((u) => u.type), ['tesla']);
+});

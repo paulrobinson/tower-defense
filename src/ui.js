@@ -23,6 +23,7 @@
     defNext: document.getElementById('def-next'),
     buildSoldier: document.getElementById('build-soldier'),
     buildArtillery: document.getElementById('build-artillery'),
+    buildTesla: document.getElementById('build-tesla'),
     repeatBuild: document.getElementById('repeat-build'),
     buildQueue: document.getElementById('build-queue'),
     buildEmpty: document.getElementById('build-empty'),
@@ -230,6 +231,10 @@
   async function animateShot(unit, target) {
     const a = toPixel(unit);
     const b = toPixel(target);
+    if (G.UNITS[unit.type].chain) {
+      await animateLightning(unit, a, b);
+      return;
+    }
     if (unit.type === 'soldier') {
       const node = scene.querySelector(`[data-id="${unit.id}"]`);
       if (!node) return;
@@ -249,6 +254,52 @@
       shell.setAttribute('cy', y.toFixed(2));
     });
     shell.remove();
+  }
+
+  /** A jagged bolt from a to b; new jitter each frame makes it crackle. */
+  function boltPoints(a, b, jitter) {
+    const steps = Math.max(4, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 7));
+    const nx = -(b.y - a.y);
+    const ny = b.x - a.x;
+    const len = Math.hypot(nx, ny) || 1;
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const off = i === 0 || i === steps ? 0 : (Math.random() * 2 - 1) * jitter;
+      pts.push(`${(a.x + (b.x - a.x) * t + (nx / len) * off).toFixed(1)},${(a.y + (b.y - a.y) * t + (ny / len) * off).toFixed(1)}`);
+    }
+    return pts.join(' ');
+  }
+
+  /**
+   * Tesla attack: charge crackles along the links of the whole group, then a
+   * bolt jumps from the firing unit to its target.
+   */
+  async function animateLightning(unit, a, b) {
+    const group = G.teslaGroup(game, unit);
+    const range = G.UNITS[unit.type].linkRange;
+    const links = [];
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        if (G.hexDistance(group[i], group[j]) <= range) links.push([toPixel(group[i]), toPixel(group[j])]);
+      }
+    }
+    const chargeLines = links.map(() => el('polyline', { class: `bolt charge ${unit.owner}` }, fx));
+    const glow = el('polyline', { class: `bolt glow ${unit.owner}` }, fx);
+    const core = el('polyline', { class: `bolt core ${unit.owner}` }, fx);
+    const total = TIMING.shot * 1.6;
+    const chargePart = links.length ? 0.4 : 0;
+    await animate(total, (t) => {
+      chargeLines.forEach((line, i) => line.setAttribute('points', t < 0.85 ? boltPoints(links[i][0], links[i][1], 4) : ''));
+      if (t >= chargePart) {
+        const reach = Math.min(1, (t - chargePart) / 0.25);
+        const end = { x: a.x + (b.x - a.x) * reach, y: a.y + (b.y - a.y) * reach };
+        const pts = boltPoints(a, end, 6);
+        glow.setAttribute('points', pts);
+        core.setAttribute('points', pts);
+      }
+    });
+    for (const n of [...chargeLines, glow, core]) n.remove();
   }
 
   /** Flash the target and float the damage number above it. */
@@ -346,6 +397,7 @@
     const aimLayer = el('g', { class: 'aims' }, scene);
     const piecesLayer = el('g', { class: 'pieces' }, scene);
     const arrowLayer = el('g', { class: 'arrows' }, scene);
+    const badgeLayer = el('g', { class: 'badges' }, scene);
     const labelLayer = el('g', { class: 'labels' }, scene);
     previewLayer = el('g', { class: 'preview' }, scene);
 
@@ -372,6 +424,17 @@
       }
     }
 
+    // Tesla links: a crackling line between tesla soldiers that are chained.
+    const linkLayer = el('g', { class: 'tesla-links' }, scene);
+    scene.insertBefore(linkLayer, piecesLayer);
+    for (const owner of [G.DEFENDER, G.ATTACKER]) {
+      for (const [u, v] of G.teslaLinks(game, owner)) {
+        const a = toPixel(u);
+        const b = toPixel(v);
+        el('polyline', { points: zigzag(a, b), class: `tesla-link ${owner}` }, linkLayer);
+      }
+    }
+
     // Keep
     const kp = toPixel(game.keep);
     const keepGroup = el('g', { class: 'keep-piece' }, piecesLayer);
@@ -391,6 +454,12 @@
       const g = el('g', { class: classes.join(' '), 'data-id': unit.id }, piecesLayer);
       const inner = el('g', { class: 'piece-inner', style: `transform-origin: ${x}px ${y}px` }, g);
       drawUnit(inner, unit, x, y);
+      if (G.UNITS[unit.type].chain) {
+        // Current attack power, which depends on the chained group.
+        // Right of the unit, clear of the damage labels above it and the HP bar below.
+        const badge = el('text', { x: x + HEX_SIZE * 0.62, y: y + 3, class: `attack-badge ${unit.owner}` }, badgeLayer);
+        badge.textContent = `⚡${G.attackOf(game, unit)}`;
+      }
       const loss = planned.get(unit.id) || threats.get(unit.id) || null;
       drawHpBar(g, x, y + HEX_SIZE * 0.66, unit.hp, unit.maxHp, unit.owner, 24, loss);
       g.addEventListener('click', () => onCellClick(unit));
@@ -466,7 +535,7 @@
     if (!target) return;
     const b = toPixel(target);
     el('line', { x1: p.x, y1: p.y, x2: b.x, y2: b.y, class: 'aim preview' }, previewLayer);
-    const dmg = G.damageAgainst(game, unit, target);
+    const dmg = G.damageAgainst(game, unit, target, cell);
     const hp = target.keep ? game.keep.hp : target.unit.hp;
     const fate = dmg.min >= hp ? 'kill' : dmg.max >= hp ? 'maybe' : '';
     drawCrosshair(previewLayer, b.x, b.y, fate);
@@ -490,6 +559,13 @@
       el('path', {
         d: `M${x},${gy - k * 1.15} L${x},${gy + k} M${x - k * 0.6},${gy + k * 0.35} L${x + k * 0.6},${gy + k * 0.35}`,
         class: 'glyph',
+      }, group);
+    } else if (unit.type === 'tesla') {
+      // Tesla soldier: lightning bolt
+      const k = s * 0.36;
+      el('path', {
+        d: `M${x + k * 0.25},${gy - k} L${x - k * 0.45},${gy + k * 0.1} L${x + k * 0.05},${gy + k * 0.1} L${x - k * 0.25},${gy + k} L${x + k * 0.45},${gy - k * 0.15} L${x - k * 0.05},${gy - k * 0.15} Z`,
+        class: 'glyph bolt-glyph',
       }, group);
     } else {
       // Artillery: crosshair
@@ -519,6 +595,21 @@
     const maybe = Math.min(hp, loss.max);
     if (maybe > sure) el('rect', { x: at(hp - maybe), y, width: at(hp - sure) - at(hp - maybe), height: h, class: 'hp-loss maybe' }, group);
     if (sure > 0) el('rect', { x: at(hp - sure), y, width: at(hp) - at(hp - sure), height: h, class: 'hp-loss sure' }, group);
+  }
+
+  /** A fixed zigzag between two points, for tesla links. */
+  function zigzag(a, b) {
+    const steps = Math.max(3, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 8));
+    const nx = -(b.y - a.y);
+    const ny = b.x - a.x;
+    const len = Math.hypot(nx, ny) || 1;
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const off = i === 0 || i === steps ? 0 : (i % 2 ? 3.5 : -3.5);
+      pts.push(`${(a.x + (b.x - a.x) * t + (nx / len) * off).toFixed(1)},${(a.y + (b.y - a.y) * t + (ny / len) * off).toFixed(1)}`);
+    }
+    return pts.join(' ');
   }
 
   /** A small standalone icon of a unit, for the build queue. */
@@ -617,6 +708,7 @@
     const canEdit = !game.winner;
     els.buildSoldier.disabled = !canEdit;
     els.buildArtillery.disabled = !canEdit;
+    els.buildTesla.disabled = !canEdit;
     els.repeatBuild.checked = game.repeatBuild;
     els.repeatBuild.disabled = !canEdit;
     els.buildEmpty.hidden = schedule.length > 0 || !!game.winner;
@@ -678,8 +770,16 @@
     const s = G.UNITS[unit.type];
     const whose = unit.owner === HUMAN ? 'Your' : 'Enemy';
     const range = s.minRange === s.maxRange ? `${s.maxRange} cell` : `${s.minRange}–${s.maxRange} cells`;
+    let attack = `attack ${s.attack}`;
+    if (s.chain) {
+      const n = G.teslaGroup(game, unit).length;
+      attack = n === 1
+        ? 'attack 1 (on its own)'
+        : `attack ${n * n} (group of ${n}, ${n}²)`;
+    }
     let text = `${whose} ${s.name.toLowerCase()}: ${unit.hp}/${unit.maxHp} HP, moves ${s.move}, ` +
-      `attack ${s.attack}, defence ${s.defence}, hits targets ${range} away.`;
+      `${attack}, defence ${s.defence}, hits targets ${range} away.`;
+    if (s.chain) text += ` Tesla soldiers within ${s.linkRange} cells chain together; each attacks with the group size squared.`;
     if (!s.firesAfterMoving) text += ` It can't fire on a turn it moves.`;
     if (unit.owner === HUMAN && game.turn === HUMAN) {
       if (unit.moved) {
@@ -818,9 +918,11 @@
 
   els.buildSoldier.prepend(unitIcon('soldier'));
   els.buildArtillery.prepend(unitIcon('artillery'));
+  els.buildTesla.prepend(unitIcon('tesla'));
   els.endBtn.addEventListener('click', endHumanTurn);
   els.buildSoldier.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'soldier')));
   els.buildArtillery.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'artillery')));
+  els.buildTesla.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'tesla')));
   els.repeatBuild.addEventListener('change', () => editQueue(() => G.setRepeatBuild(game, els.repeatBuild.checked)));
   // New game sits away from the turn controls and asks for a second click,
   // so a stray tap can't throw away a game in progress.

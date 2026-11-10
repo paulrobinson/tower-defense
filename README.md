@@ -16,15 +16,22 @@ You play the defenders. The CPU plays the attackers.
 
 - The board is a roughly circular hex grid, 17 cells across at its widest.
 - The defender's **keep** sits in the centre (40 HP, defence 4).
-- Units are soldiers or artillery. The attackers have 12: 3 artillery and 9 soldiers.
-  The defender builds as many as they like from a build queue.
+- Units are soldiers, artillery and tesla soldiers. The attackers have 12: 3 artillery and
+  9 soldiers. The defender builds as many as they like, of any type, from a build queue.
 
 | Unit      | Move | Attack | Defence | Attack radius | HP | Build time |
 |-----------|------|--------|---------|---------------|----|------------|
 | Soldier   | 2    | 2      | 2       | 1             | 10 | 1 turn     |
 | Artillery | 1    | 5      | 1       | 2–4           | 10 | 3 turns    |
+| Tesla     | 2    | n²     | 2       | 1–2           | 15 | 2 turns    |
 
 Artillery can't fire on a turn it moves.
+
+**Tesla soldiers** link up with friendly tesla soldiers within 2 cells, and links chain into
+groups. Each tesla soldier in a group of n attacks with n²: one alone has attack 1, two have 4
+each, three have 9 each. The group is counted when each one fires, after moves. Links are drawn
+as crackling lines, a ⚡ badge shows each one's current attack, and they attack with a lightning
+bolt after charge crackles along the group's links.
 
 Each turn:
 

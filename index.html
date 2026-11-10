@@ -54,6 +54,7 @@
           <div class="build-add">
             <button id="build-soldier" type="button">+ Soldier <span class="cost">1 turn</span></button>
             <button id="build-artillery" type="button">+ Artillery <span class="cost">3 turns</span></button>
+            <button id="build-tesla" type="button">+ Tesla <span class="cost">2 turns</span></button>
           </div>
           <ol id="build-queue" class="queue"></ol>
           <p id="build-empty" class="queue-empty" hidden>Nothing is being built. Add a unit to the queue.</p>
@@ -66,16 +67,18 @@
           <tbody>
             <tr><th scope="row">Soldier</th><td>2</td><td>2</td><td>2</td><td>1</td><td>10</td></tr>
             <tr><th scope="row">Artillery</th><td>1</td><td>5</td><td>1</td><td>2–4*</td><td>10</td></tr>
+            <tr><th scope="row">Tesla</th><td>2</td><td>n²†</td><td>2</td><td>1–2</td><td>15</td></tr>
           </tbody>
         </table>
-        <p class="footnote">* Artillery can't fire on a turn it moves.</p>
+        <p class="footnote">* Artillery can't fire on a turn it moves.<br />† n = tesla soldiers chained together (each within 2 cells of another).</p>
 
         <details class="rules">
           <summary>How to play</summary>
           <ul>
             <li>You are the <span class="swatch defender"></span> defenders (circles). The CPU plays the <span class="swatch attacker"></span> attackers (triangles) and goes first.</li>
-            <li>Units are soldiers (sword) or artillery (crosshair).</li>
-            <li>You build as many units as you like from the <strong>build queue</strong>. A soldier takes 1 turn and artillery 3. Only the unit at the front is being built. When it's done it appears at the start of your turn on a random cell near the keep. Turn on <strong>Repeat</strong> to put each finished unit back at the end of the queue.</li>
+            <li>Units are soldiers (sword), artillery (crosshair) and tesla soldiers (lightning bolt).</li>
+            <li>Tesla soldiers within 2 cells of each other link up, shown by a crackling line, and links chain. Each tesla soldier in a group of n attacks with n²: one alone has attack 1, a chain of 3 has attack 9 each. The ⚡ badge shows each one's current attack.</li>
+            <li>You build as many units as you like from the <strong>build queue</strong>. A soldier takes 1 turn, a tesla soldier 2 and artillery 3. Only the unit at the front is being built. When it's done it appears at the start of your turn on a random cell near the keep. Turn on <strong>Repeat</strong> to put each finished unit back at the end of the queue.</li>
             <li>The attackers have 12 units: 3 artillery and 9 soldiers. One enters at random on the edge each turn.</li>
             <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range. Artillery that moved this turn holds its fire.</li>
             <li>Changed your mind? Tap a moved unit, then tap a cell on its path to walk it back. Walking it all the way back lets it move again.</li>

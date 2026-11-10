@@ -42,6 +42,9 @@
   const UNITS = {
     soldier: { name: 'Soldier', move: 2, attack: 2, defence: 2, minRange: 1, maxRange: 1, hp: 10, firesAfterMoving: true, buildTurns: 1 },
     artillery: { name: 'Artillery', move: 1, attack: 5, defence: 1, minRange: 2, maxRange: 4, hp: 10, firesAfterMoving: false, buildTurns: 3 },
+    // Tesla soldiers link up with friendly tesla soldiers within `linkRange`,
+    // chaining into groups. Each one attacks with (group size)^2.
+    tesla: { name: 'Tesla soldier', move: 2, attack: 1, chain: true, linkRange: 2, defence: 2, minRange: 1, maxRange: 2, hp: 15, firesAfterMoving: true, buildTurns: 2 },
   };
 
   const CONFIG = {
@@ -319,14 +322,63 @@
     return distance >= s.minRange && distance <= s.maxRange;
   }
 
-  /** Average damage `attackerType` does to a target with `defence`. */
-  function expectedDamage(game, attackerType, defence) {
-    return (game.config.damageBase * UNITS[attackerType].attack) / defence;
+  /**
+   * The tesla soldiers chained to `unit` (including itself), with `unit`
+   * treated as standing at `from`. Two tesla soldiers of the same side are
+   * linked when within linkRange of each other; links chain.
+   */
+  function teslaGroup(game, unit, from = unit) {
+    const s = UNITS[unit.type];
+    if (!s.chain) return [unit];
+    const at = (u) => (u === unit ? from : u);
+    const members = piecesOf(game, unit.owner).filter((u) => u.type === unit.type && u !== unit);
+    const group = [unit];
+    const queue = [unit];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (let i = members.length - 1; i >= 0; i--) {
+        if (hexDistance(at(cur), at(members[i])) <= s.linkRange) {
+          group.push(members[i]);
+          queue.push(members[i]);
+          members.splice(i, 1);
+        }
+      }
+    }
+    return group;
+  }
+
+  /** Every link between tesla soldiers of `owner`, as pairs of units. */
+  function teslaLinks(game, owner) {
+    const teslas = piecesOf(game, owner).filter((u) => UNITS[u.type].chain);
+    const links = [];
+    for (let i = 0; i < teslas.length; i++) {
+      for (let j = i + 1; j < teslas.length; j++) {
+        if (hexDistance(teslas[i], teslas[j]) <= UNITS[teslas[i].type].linkRange) links.push([teslas[i], teslas[j]]);
+      }
+    }
+    return links;
+  }
+
+  /**
+   * Attack power of `attacker` (a unit, or a type name for the base value),
+   * standing at `from`. Tesla soldiers attack with (group size)^2.
+   */
+  function attackOf(game, attacker, from) {
+    if (typeof attacker === 'string') return UNITS[attacker].attack;
+    const s = UNITS[attacker.type];
+    if (!s.chain) return s.attack;
+    const n = teslaGroup(game, attacker, from || attacker).length;
+    return n * n;
+  }
+
+  /** Average damage `attacker` (unit or type) does to a target with `defence`. */
+  function expectedDamage(game, attacker, defence, from) {
+    return (game.config.damageBase * attackOf(game, attacker, from)) / defence;
   }
 
   /** Random damage: the average scaled by a factor between 0.5 and 1.5, at least 1. */
-  function rollDamage(game, attackerType, defence) {
-    const avg = expectedDamage(game, attackerType, defence);
+  function rollDamage(game, attacker, defence) {
+    const avg = expectedDamage(game, attacker, defence);
     return Math.max(1, Math.round(avg * (0.5 + game.rng())));
   }
 
@@ -354,7 +406,7 @@
     let bestScore = Infinity;
     for (const enemy of piecesOf(game, other(unit.owner))) {
       if (!inAttackRange(unit.type, hexDistance(from, enemy))) continue;
-      const left = enemy.hp - expectedDamage(game, unit.type, stats(enemy).defence);
+      const left = enemy.hp - expectedDamage(game, unit, stats(enemy).defence, from);
       const score = left * 1000 + enemy.id;
       if (score < bestScore) {
         bestScore = score;
@@ -388,8 +440,8 @@
   }
 
   /** The smallest and largest damage a hit can roll, and the average. */
-  function damageRange(game, attackerType, defence) {
-    const avg = expectedDamage(game, attackerType, defence);
+  function damageRange(game, attacker, defence, from) {
+    const avg = expectedDamage(game, attacker, defence, from);
     return {
       min: Math.max(1, Math.round(avg * 0.5)),
       max: Math.max(1, Math.round(avg * 1.5 - 1e-9)), // rng() < 1, so 1.5x is never reached
@@ -397,10 +449,10 @@
     };
   }
 
-  /** Damage range for `unit` hitting `target` (a unit, or { keep: true }). */
-  function damageAgainst(game, unit, target) {
+  /** Damage range for `unit` (standing at `from`) hitting `target` (a unit, or { keep: true }). */
+  function damageAgainst(game, unit, target, from) {
     const defence = target.keep ? game.config.keepDefence : stats(target.unit || target).defence;
-    return damageRange(game, unit.type, defence);
+    return damageRange(game, unit, defence, from);
   }
 
   /**
@@ -435,7 +487,7 @@
     let max = 0;
     const attackers = threatsAt(game, cell, owner, fireMap);
     for (const e of attackers) {
-      const d = damageRange(game, e.type, UNITS[type].defence);
+      const d = damageRange(game, e, UNITS[type].defence);
       min += d.min;
       max += d.max;
     }
@@ -478,14 +530,18 @@
       killed: false,
     };
     if (target.keep) {
-      event.damage = rollDamage(game, unit.type, game.config.keepDefence);
+      event.attack = attackOf(game, unit);
+      event.chain = teslaGroup(game, unit).map((u) => ({ id: u.id, q: u.q, r: u.r }));
+      event.damage = rollDamage(game, unit, game.config.keepDefence);
       game.keep.hp = Math.max(0, game.keep.hp - event.damage);
       event.hpAfter = game.keep.hp;
       event.killed = game.keep.hp === 0;
       addLog(game, `${stats(unit).name} hit the keep for ${event.damage} (${game.keep.hp} HP left)`);
     } else {
       const victim = target.unit;
-      event.damage = rollDamage(game, unit.type, stats(victim).defence);
+      event.attack = attackOf(game, unit);
+      event.chain = teslaGroup(game, unit).map((u) => ({ id: u.id, q: u.q, r: u.r }));
+      event.damage = rollDamage(game, unit, stats(victim).defence);
       victim.hp = Math.max(0, victim.hp - event.damage);
       event.hpAfter = victim.hp;
       if (victim.hp === 0) {
@@ -666,6 +722,9 @@
     unmovedPieces,
     inAttackRange,
     expectedDamage,
+    attackOf,
+    teslaGroup,
+    teslaLinks,
     chooseTarget,
     firingOrder,
     fire,
