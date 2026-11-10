@@ -30,7 +30,6 @@
     attReserve: document.getElementById('att-reserve'),
     keepHp: document.getElementById('keep-hp'),
     message: document.getElementById('message'),
-    log: document.getElementById('log'),
     endBtn: document.getElementById('end-btn'),
     newBtn: document.getElementById('new-btn'),
   };
@@ -47,6 +46,7 @@
   let scene;
   let fx;
   let previewLayer; // hover preview, inside `scene`
+  let enemyFire = []; // where each enemy could fire from next turn (during your turn)
 
   const toPixel = ({ q, r }) => ({
     x: HEX_SIZE * SQRT3 * (q + r / 2),
@@ -314,6 +314,33 @@
     // Enemies the selected unit could attack instead (tap one to switch).
     const candidates = mine && G.canFire(selectedUnit) ? G.targetsInRange(game, selectedUnit) : [];
 
+    // Where enemies could fire from next turn: used to flag dangerous cells
+    // and to show how much each of your units could lose.
+    enemyFire = myTurn ? G.fireMapFor(game, CPU) : [];
+    const dangerous = (cell) => G.threatsAt(game, cell, HUMAN, enemyFire).length > 0;
+
+    // What your units will do to each enemy when you end the turn (summed),
+    // and what enemies could do to each of your units (each enemy counted as
+    // if it picked that unit, so their actual choice isn't revealed).
+    const planned = new Map(); // enemy id -> { target, min, max, shooters: [] }
+    const threats = new Map(); // your unit id -> { min, max, count }
+    if (myTurn) {
+      for (const unit of G.piecesOf(game, HUMAN)) {
+        const t = G.threatDamage(game, unit, HUMAN, unit.type, enemyFire);
+        if (t.count) threats.set(unit.id, t);
+        if (!G.canFire(unit)) continue;
+        const target = G.chooseTarget(game, unit);
+        if (!target) continue;
+        const dmg = G.damageAgainst(game, unit, target);
+        const id = target.keep ? 'keep' : target.unit.id;
+        const entry = planned.get(id) || { target, min: 0, max: 0, shooters: [] };
+        entry.min += dmg.min;
+        entry.max += dmg.max;
+        entry.shooters.push({ unit, picked: !!target.picked });
+        planned.set(id, entry);
+      }
+    }
+
     const cellsLayer = el('g', { class: 'cells' }, scene);
     const markLayer = el('g', { class: 'marks' }, scene);
     const aimLayer = el('g', { class: 'aims' }, scene);
@@ -331,6 +358,11 @@
       if (inRange.has(k)) classes.push(`in-range ${selectedUnit.owner}`);
       if (moveTargets.has(k)) classes.push('target');
       if (backTargets.has(k)) classes.push('target back');
+      if ((moveTargets.has(k) || backTargets.has(k)) && dangerous(cell)) {
+        classes.push('danger');
+        // Drawn above all cells so neighbouring hexes don't cover the border.
+        el('polygon', { points: hexPoints(x, y, HEX_SIZE * 0.93), class: 'danger-outline' }, markLayer);
+      }
       if (selected && G.samePos(selected, cell)) classes.push('selected');
       const hex = el('polygon', { points: hexPoints(x, y), class: classes.join(' '), 'data-key': k }, cellsLayer);
       hex.addEventListener('click', () => onCellClick(cell));
@@ -359,36 +391,33 @@
       const g = el('g', { class: classes.join(' '), 'data-id': unit.id }, piecesLayer);
       const inner = el('g', { class: 'piece-inner', style: `transform-origin: ${x}px ${y}px` }, g);
       drawUnit(inner, unit, x, y);
-      drawHpBar(g, x, y + HEX_SIZE * 0.66, unit.hp, unit.maxHp, unit.owner, 24);
+      const loss = planned.get(unit.id) || threats.get(unit.id) || null;
+      drawHpBar(g, x, y + HEX_SIZE * 0.66, unit.hp, unit.maxHp, unit.owner, 24, loss);
       g.addEventListener('click', () => onCellClick(unit));
+    }
+
+    // Your units in reach of the enemy: how much they could lose next turn.
+    for (const unit of G.piecesOf(game, HUMAN)) {
+      const t = threats.get(unit.id);
+      if (!t) continue;
+      const { x, y } = toPixel(unit);
+      const fate = t.min >= unit.hp ? 'kill' : t.max >= unit.hp ? 'maybe' : '';
+      drawDamageLabel(labelLayer, x, y, t.min, t.max, unit.hp, `threat ${fate}`, 'at risk ');
     }
 
     // Aim lines: who each of your units will fire at when you end the turn,
     // moved or not, with the damage each target can expect.
-    if (myTurn) {
-      const totals = new Map(); // target id -> { target, min, max }
-      for (const unit of G.piecesOf(game, HUMAN)) {
-        if (!G.canFire(unit)) continue;
-        const target = G.chooseTarget(game, unit);
-        if (!target) continue;
+    for (const { target, min, max, shooters } of planned.values()) {
+      const b = toPixel(target);
+      for (const { unit, picked } of shooters) {
         const a = toPixel(unit);
-        const b = toPixel(target);
         const isSel = selectedUnit === unit;
-        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: `aim${isSel ? ' selected' : ''}${target.picked ? ' picked' : ''}` }, aimLayer);
-        const dmg = G.damageAgainst(game, unit, target);
-        const id = target.keep ? 'keep' : target.unit.id;
-        const t = totals.get(id) || { target, min: 0, max: 0 };
-        t.min += dmg.min;
-        t.max += dmg.max;
-        totals.set(id, t);
+        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: `aim${isSel ? ' selected' : ''}${picked ? ' picked' : ''}` }, aimLayer);
       }
-      for (const { target, min, max } of totals.values()) {
-        const hp = target.keep ? game.keep.hp : target.unit.hp;
-        const fate = min >= hp ? 'kill' : max >= hp ? 'maybe' : '';
-        const b = toPixel(target);
-        drawCrosshair(aimLayer, b.x, b.y, fate);
-        drawDamageLabel(labelLayer, b.x, b.y, min, max, fate);
-      }
+      const hp = target.keep ? game.keep.hp : target.unit.hp;
+      const fate = min >= hp ? 'kill' : max >= hp ? 'maybe' : '';
+      drawCrosshair(aimLayer, b.x, b.y, fate);
+      drawDamageLabel(labelLayer, b.x, b.y, min, max, hp, fate);
     }
 
     // Arrows and entry markers. During your turn: your moves so far plus the
@@ -420,6 +449,12 @@
     previewLayer.replaceChildren();
     if (!cell) return;
     const p = toPixel(cell);
+    // What the unit could lose standing there (shown below the cell).
+    const risk = G.threatDamage(game, cell, unit.owner, unit.type, enemyFire);
+    if (risk.count) {
+      const fate = risk.min >= unit.hp ? 'kill' : risk.max >= unit.hp ? 'maybe' : '';
+      drawDamageLabel(previewLayer, p.x, p.y + HEX_SIZE * 1.95, risk.min, risk.max, unit.hp, `threat ${fate}`, 'at risk ');
+    }
     // Walking all the way back cancels the move, so artillery could fire again.
     const backToStart = unit.moved && G.stepBackCells(game, unit).some((c) => c.index === 0 && G.samePos(c, cell));
     const willMove = backToStart ? false : !G.samePos(cell, unit);
@@ -435,7 +470,7 @@
     const hp = target.keep ? game.keep.hp : target.unit.hp;
     const fate = dmg.min >= hp ? 'kill' : dmg.max >= hp ? 'maybe' : '';
     drawCrosshair(previewLayer, b.x, b.y, fate);
-    drawDamageLabel(previewLayer, b.x, b.y, dmg.min, dmg.max, fate);
+    drawDamageLabel(previewLayer, b.x, b.y, dmg.min, dmg.max, hp, fate);
   }
 
   function drawUnit(group, unit, x, y) {
@@ -467,12 +502,30 @@
     }
   }
 
-  function drawHpBar(group, x, y, hp, maxHp, owner, width) {
-    const h = 3.6;
-    el('rect', { x: x - width / 2, y, width, height: h, rx: 1.5, class: 'hp-track' }, group);
+  /**
+   * HP bar against max HP. With `loss` ({ min, max }), the end of the bar is
+   * marked: solid red for HP that will be lost, light red for HP that might be.
+   */
+  function drawHpBar(group, x, y, hp, maxHp, owner, width, loss = null) {
+    const h = loss ? 5 : 3.6;
+    const left = x - width / 2;
+    el('rect', { x: left, y, width, height: h, rx: 1.5, class: 'hp-track' }, group);
     const ratio = Math.max(0, hp / maxHp);
     const level = ratio > 0.6 ? 'high' : ratio > 0.3 ? 'mid' : 'low';
-    el('rect', { x: x - width / 2, y, width: width * ratio, height: h, rx: 1.5, class: `hp-fill ${owner} ${level}` }, group);
+    el('rect', { x: left, y, width: width * ratio, height: h, rx: 1.5, class: `hp-fill ${owner} ${level}` }, group);
+    if (!loss) return;
+    const at = (v) => left + (width * Math.max(0, v)) / maxHp;
+    const sure = Math.min(hp, loss.min);
+    const maybe = Math.min(hp, loss.max);
+    if (maybe > sure) el('rect', { x: at(hp - maybe), y, width: at(hp - sure) - at(hp - maybe), height: h, class: 'hp-loss maybe' }, group);
+    if (sure > 0) el('rect', { x: at(hp - sure), y, width: at(hp) - at(hp - sure), height: h, class: 'hp-loss sure' }, group);
+  }
+
+  /** A small standalone icon of a unit, for the build queue. */
+  function unitIcon(type, owner = HUMAN) {
+    const svg = el('svg', { viewBox: `${-HEX_SIZE * 0.7} ${-HEX_SIZE * 0.7} ${HEX_SIZE * 1.4} ${HEX_SIZE * 1.4}`, class: `unit-icon piece ${owner} ${type}`, 'aria-hidden': 'true' });
+    drawUnit(svg, { type, owner }, 0, 0);
+    return svg;
   }
 
   function drawCrosshair(layer, x, y, fate = '') {
@@ -480,11 +533,14 @@
     el('circle', { cx: x, cy: y, r, class: `crosshair ${fate}` }, layer);
   }
 
-  /** Expected damage above a target, e.g. "−2–4". Red if it will die, amber if it might. */
-  function drawDamageLabel(layer, x, y, min, max, fate) {
-    const text = min === max ? `−${min}` : `−${min}–${max}`;
+  /**
+   * Damage above a unit, against its current HP, e.g. "−2–4 of 7 HP".
+   * Red with ✕ if it will be destroyed, amber if it might be.
+   */
+  function drawDamageLabel(layer, x, y, min, max, hp, fate, prefix = '') {
+    const amount = min === max ? `−${min}` : `−${min}–${max}`;
     const label = el('text', { x, y: y - HEX_SIZE * 0.88, class: `dmg-label ${fate}` }, layer);
-    label.textContent = fate === 'kill' ? `${text} ✕` : text;
+    label.textContent = `${prefix}${amount} of ${hp} HP${fate.includes('kill') ? ' ✕' : ''}`;
   }
 
   function drawNote(layer, x, y, text) {
@@ -552,15 +608,6 @@
     els.keepHp.textContent = `${game.keep.hp} / ${game.keep.maxHp}`;
     els.message.textContent = message;
     els.endBtn.disabled = busy || !!game.winner || game.turn !== HUMAN;
-
-    els.log.replaceChildren();
-    for (const entry of [...game.log].reverse().slice(0, 120)) {
-      const li = document.createElement('li');
-      li.className = entry.player;
-      const who = entry.player === CPU ? 'Attacker' : 'Defender';
-      li.textContent = `T${entry.turn} ${who} ${entry.message}`;
-      els.log.appendChild(li);
-    }
   }
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -583,6 +630,7 @@
       const s = G.UNITS[item.type];
       const li = document.createElement('li');
       li.className = `queue-item ${item.type}${i === 0 ? ' building' : ''}`;
+      const icon = unitIcon(item.type);
 
       const name = document.createElement('span');
       name.className = 'queue-name';
@@ -614,7 +662,7 @@
       mk('Move down', '↓', () => editQueue(() => G.moveInQueue(game, item.id, 1)), i === schedule.length - 1);
       mk('Remove', '✕', () => editQueue(() => G.removeFromQueue(game, item.id), item), false);
 
-      li.append(name, bar, eta, controls);
+      li.append(icon, name, bar, eta, controls);
       els.buildQueue.appendChild(li);
     });
   }
@@ -768,6 +816,8 @@
     render();
   }
 
+  els.buildSoldier.prepend(unitIcon('soldier'));
+  els.buildArtillery.prepend(unitIcon('artillery'));
   els.endBtn.addEventListener('click', endHumanTurn);
   els.buildSoldier.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'soldier')));
   els.buildArtillery.addEventListener('click', () => editQueue(() => G.queueUnit(game, 'artillery')));

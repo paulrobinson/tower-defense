@@ -47,9 +47,17 @@ Each turn:
    Damage is random: 3 × attack ÷ defence, scaled by a random factor between 0.5 and 1.5.
    A unit at 0 HP is destroyed. Artillery that moved this turn doesn't fire.
 
-While planning, each targeted enemy shows the damage range it will take when you end the turn,
-summed over all your units aiming at it: amber if it might be destroyed, red with ✕ if it will be.
-Hovering a destination previews what the unit would hit from there.
+While planning:
+
+- Each enemy you'll attack shows the damage it will take when you end the turn, against the HP it
+  has left (e.g. "−2–4 of 7 HP"), summed over all your units aiming at it. Amber means it might be
+  destroyed; red with ✕ means it will be.
+- Each of your units within enemy reach shows "at risk": the most it could lose next turn if every
+  enemy that can reach it picked it. This doesn't reveal which target an enemy will actually choose.
+- HP bars mark the HP that will be lost (solid red) and might be lost (light red).
+- Selecting a unit outlines in red any destination within enemy reach. Enemy reach accounts for
+  their move and range, and for artillery not firing after it moves.
+- Hovering a destination previews what the unit would hit from there and what it would risk.
 
 **Attackers win** by destroying the keep. **Defenders win** by destroying all 12 attackers.
 

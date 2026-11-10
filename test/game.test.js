@@ -465,3 +465,33 @@ test('damage range matches what can actually be rolled', () => {
     assert.equal(Math.max(...seen), range.max, `${atk} vs defence ${def} max`);
   }
 });
+
+// ---------- threats ----------
+
+test('an enemy soldier threatens cells it could move next to (move 2 + range 1)', () => {
+  const game = emptyGame();
+  const e = put(game, G.ATTACKER, 'soldier', 6, 0);
+  assert.deepEqual(G.threatsAt(game, { q: 3, r: 0 }, G.DEFENDER), [e], '3 away: move 2 then hit');
+  assert.deepEqual(G.threatsAt(game, { q: 2, r: 0 }, G.DEFENDER), [], '4 away: out of reach');
+});
+
+test('enemy artillery only threatens from where it stands, since it cannot fire after moving', () => {
+  const game = emptyGame();
+  const a = put(game, G.ATTACKER, 'artillery', 6, 0);
+  assert.deepEqual(G.fireCells(game, a), [{ q: 6, r: 0 }]);
+  assert.deepEqual(G.threatsAt(game, { q: 2, r: 0 }, G.DEFENDER), [a], '4 away: in range');
+  assert.deepEqual(G.threatsAt(game, { q: 1, r: 0 }, G.DEFENDER), [], '5 away: it would have to move');
+  assert.deepEqual(G.threatsAt(game, { q: 5, r: 0 }, G.DEFENDER), [], 'adjacent: inside its minimum range');
+});
+
+test('threat damage adds up every enemy that could reach the cell', () => {
+  const game = emptyGame();
+  put(game, G.ATTACKER, 'soldier', 4, 0);
+  put(game, G.ATTACKER, 'artillery', 5, 0);
+  const t = G.threatDamage(game, { q: 2, r: 0 }, G.DEFENDER, 'soldier');
+  const s = G.damageRange(game, 'soldier', 2);
+  const a = G.damageRange(game, 'artillery', 2);
+  assert.equal(t.count, 2);
+  assert.equal(t.min, s.min + a.min);
+  assert.equal(t.max, s.max + a.max);
+});

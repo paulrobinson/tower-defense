@@ -15,6 +15,9 @@
   --keep: #7a6a4f;
   --select: #f2b705;
   --cpu-arrow: #6f6a62;
+  --danger: #d0402f;
+  --loss-sure: #c0291b;
+  --loss-maybe: rgba(224, 92, 76, 0.45);
   --hp-track: rgba(0, 0, 0, 0.18);
   --hp-high: #3f9b52;
   --hp-mid: #d49a1a;
@@ -38,6 +41,9 @@
     --attacker-soft: rgba(232, 96, 79, 0.35);
     --keep: #b39d74;
     --cpu-arrow: #b4ada2;
+    --danger: #ff6b5b;
+    --loss-sure: #ff5a48;
+    --loss-maybe: rgba(255, 120, 104, 0.5);
     --hp-track: rgba(255, 255, 255, 0.18);
     --hp-high: #5cc06f;
     --hp-mid: #e8b23a;
@@ -129,6 +135,7 @@ main {
 .cell.in-range.attacker { fill: var(--attacker-soft); }
 .cell.target { stroke: var(--select); stroke-width: 2.5; fill: rgba(242, 183, 5, 0.3); }
 .cell.target.in-range { fill: rgba(242, 183, 5, 0.45); }
+.danger-outline { fill: none; stroke: var(--danger); stroke-width: 2.6; pointer-events: none; }
 .cell.target.back { stroke: var(--defender); stroke-dasharray: 4 3; fill: var(--defender-soft); }
 .cell.selected { stroke: var(--select); stroke-width: 3; }
 
@@ -172,6 +179,16 @@ main {
 .dmg-label.maybe { fill: var(--hp-mid); }
 .dmg-label.kill { fill: var(--hp-low); }
 .dmg-label.note { fill: var(--muted); font-weight: 700; }
+.dmg-label.threat { fill: var(--muted); font-size: 9.5px; font-weight: 700; }
+.dmg-label.threat.maybe { fill: var(--hp-mid); }
+.dmg-label.threat.kill { fill: var(--hp-low); }
+.hp-loss.sure { fill: var(--loss-sure); }
+.hp-loss.maybe { fill: var(--loss-maybe); }
+
+.unit-icon { width: 20px; height: 20px; flex: none; overflow: visible; cursor: inherit; vertical-align: middle; }
+.unit-icon .body { stroke-width: 1.5; }
+.build-add button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.build-add .unit-icon { width: 22px; height: 22px; }
 
 .fx { pointer-events: none; }
 .shell { stroke: var(--bg); stroke-width: 1.2; }
@@ -306,7 +323,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .queue { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
 .queue-item {
   display: grid;
-  grid-template-columns: 4.6rem 1fr 4.2rem auto;
+  grid-template-columns: 20px 4.6rem 1fr 4.2rem auto;
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
@@ -329,12 +346,3 @@ button:disabled { opacity: 0.5; cursor: default; }
 .units tbody th { text-align: left; }
 
 h2 { font-size: 1rem; margin: 16px 0 4px; }
-.log {
-  max-height: 200px;
-  overflow-y: auto;
-  margin: 0;
-  padding-left: 28px;
-  font-size: 0.85rem;
-}
-.log li.defender { color: var(--defender); }
-.log li.attacker { color: var(--attacker); }

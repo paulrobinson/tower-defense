@@ -52,12 +52,12 @@
     jitter: 2,
   };
 
-  /** Cells from which each enemy could fire next turn (their reach plus where they stand). */
+  /**
+   * Cells from which each enemy could fire next turn: where it stands, plus
+   * its reach for units that can fire after moving.
+   */
   function enemyReach(game, owner) {
-    return G.piecesOf(game, G.other(owner)).map((e) => ({
-      unit: e,
-      cells: [{ q: e.q, r: e.r }, ...G.reachable(game, e.q, e.r)],
-    }));
+    return G.fireMapFor(game, G.other(owner));
   }
 
   function expectedIncoming(game, unit, cell, reach) {

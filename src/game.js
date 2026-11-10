@@ -403,6 +403,45 @@
     return damageRange(game, unit.type, defence);
   }
 
+  /**
+   * Cells `unit` could fire from on its next turn: where it stands, plus
+   * anywhere it can move to if its type can fire after moving.
+   */
+  function fireCells(game, unit) {
+    const here = [{ q: unit.q, r: unit.r }];
+    if (!UNITS[unit.type].firesAfterMoving) return here;
+    return here.concat(reachable(game, unit.q, unit.r).map(pos));
+  }
+
+  /**
+   * Enemy units that could attack a unit of `owner` standing at `cell` on
+   * their next turn (each counted as if it chose that unit). Pass
+   * `fireMap` (from fireMapFor) to avoid recomputing reach for many cells.
+   */
+  function threatsAt(game, cell, owner, fireMap = fireMapFor(game, other(owner))) {
+    return fireMap
+      .filter(({ unit, cells }) => cells.some((c) => inAttackRange(unit.type, hexDistance(c, cell))))
+      .map(({ unit }) => unit);
+  }
+
+  /** For each unit of `owner`: the cells it could fire from next turn. */
+  function fireMapFor(game, owner) {
+    return piecesOf(game, owner).map((unit) => ({ unit, cells: fireCells(game, unit) }));
+  }
+
+  /** Damage range a unit of `type` could take at `cell` if every threatening enemy picked it. */
+  function threatDamage(game, cell, owner, type, fireMap) {
+    let min = 0;
+    let max = 0;
+    const attackers = threatsAt(game, cell, owner, fireMap);
+    for (const e of attackers) {
+      const d = damageRange(game, e.type, UNITS[type].defence);
+      min += d.min;
+      max += d.max;
+    }
+    return { min, max, count: attackers.length };
+  }
+
   /** Can this unit fire this turn? Artillery that has moved cannot. */
   function canFire(unit) {
     return !(unit.moved && !UNITS[unit.type].firesAfterMoving);
@@ -641,6 +680,10 @@
     canFire,
     stepBackCells,
     stepBack,
+    fireCells,
+    fireMapFor,
+    threatsAt,
+    threatDamage,
     setTarget,
     targetsInRange,
     defaultTarget,

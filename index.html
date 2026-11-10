@@ -70,7 +70,7 @@
         </table>
         <p class="footnote">* Artillery can't fire on a turn it moves.</p>
 
-        <details class="rules" open>
+        <details class="rules">
           <summary>How to play</summary>
           <ul>
             <li>You are the <span class="swatch defender"></span> defenders (circles). The CPU plays the <span class="swatch attacker"></span> attackers (triangles) and goes first.</li>
@@ -79,7 +79,10 @@
             <li>The attackers have 12 units: 3 artillery and 9 soldiers. One enters at random on the edge each turn.</li>
             <li>Move any or all of your units, then press <strong>End turn &amp; fire</strong>. Each of your units then attacks one enemy within its range. Artillery that moved this turn holds its fire.</li>
             <li>Changed your mind? Tap a moved unit, then tap a cell on its path to walk it back. Walking it all the way back lets it move again.</li>
-            <li>The number over each enemy is the damage it will take when you end the turn: amber if it might be destroyed, red with ✕ if it will be.</li>
+            <li>Over each enemy you'll attack: the damage it will take when you end the turn, against the HP it has left (e.g. <em>−2–4 of 7 HP</em>). Amber means it might be destroyed; red with ✕ means it will be.</li>
+            <li>Over your units within enemy reach: <em>at risk</em> shows the most they could lose next turn if every enemy that can reach them picked them.</li>
+            <li>On HP bars, solid red marks HP that will be lost and light red HP that might be.</li>
+            <li>When you select a unit, destinations with a red border are within enemy reach.</li>
             <li>When a unit has more than one enemy in range, select it and tap another enemy to attack that one instead.</li>
             <li>Damage is random, averaging 3 × attack ÷ defence. A unit at 0 HP is destroyed.</li>
             <li>Units can't move through other units or the keep.</li>
@@ -88,8 +91,6 @@
           <p class="hint">Click a unit to see its moves and attack range; hover a destination to preview the range from there. Dotted lines show who your units will fire at. Grey arrows show the attackers' last moves.</p>
         </details>
 
-        <h2>Log</h2>
-        <ol id="log" class="log" reversed></ol>
       </aside>
     </main>
 
